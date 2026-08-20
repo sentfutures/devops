@@ -1,4 +1,4 @@
-name: Claude Code Review
+name: Claude PR review bot (reusable)
 
 # Reusable workflow: consuming repos invoke this from a ~15-line caller that
 # carries the `on: pull_request` triggers (including `edited`, which fires when
@@ -7,6 +7,64 @@ name: Claude Code Review
 # README in this repo.
 on:
   workflow_call:
+    inputs:
+      required_check:
+        description: >-
+          Name of the repo's CI check (as it appears in statusCheckRollup) that
+          the reviewer reads instead of running tests, e.g. "smoke" or
+          "preview". Empty: the prompt says there is no check to read — which
+          is still never grounds for withholding a verdict.
+        type: string
+        required: false
+        default: ""
+      generated_paths:
+        description: >-
+          Path pattern(s) for committed generated data the reviewer should
+          skim rather than analyze, e.g. "outputs/**". Empty: the skim rule is
+          omitted from the prompt.
+        type: string
+        required: false
+        default: ""
+      generated_paths_note:
+        description: >-
+          One-sentence repo context appended to the generated-data skim rule
+          (e.g. a pointer to the CLAUDE.md section explaining why the data is
+          committed). Ignored when generated_paths is empty.
+        type: string
+        required: false
+        default: ""
+      escalate_to:
+        description: >-
+          Space-separated GitHub logins to request review from when the bot
+          cannot supply a verdict. Empty: the escalation label is still
+          applied, but nobody is requested.
+        type: string
+        required: false
+        default: ""
+      escalation_label:
+        description: >-
+          Label applied when a human needs to review. Create it in the repo up
+          front (a missing label degrades to a warning). Pick a label no other
+          automation assigns meaning to.
+        type: string
+        required: false
+        default: "needs-human-review"
+      extra_instructions:
+        description: >-
+          Freeform repo-specific review rules, inserted into the prompt after
+          the standard review scope. This is the intended place to customize
+          what the bot looks for; the reviewing rules themselves are
+          deliberately not configurable.
+        type: string
+        required: false
+        default: ""
+      model:
+        description: >-
+          Model override passed to the action as --model (e.g.
+          "claude-sonnet-5"). Empty: the action's default model.
+        type: string
+        required: false
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: OAuth token of the shared Claude bot account (org-level secret).
@@ -16,7 +74,8 @@ jobs:
   claude-review:
     # Fork PRs can't access secrets/OIDC on the pull_request trigger, so the
     # review can't authenticate and the job always fails. Skip them here; forks
-    # are reviewed on demand via an `@claude` comment (see claude.yml) instead.
+    # are reviewed on demand via an `@claude` comment (see claude-mention.yml)
+    # instead.
     # For `edited` events, only run when the base branch changed (the payload's
     # `changes.base` is present only then) — not on title/body edits.
     if: >-
@@ -55,6 +114,153 @@ jobs:
         id: review-start
         run: echo "ts=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+
+      # The review prompt is assembled here, not inline in the action's
+      # `with:`, so callers can swap the repo-specific sections through
+      # workflow_call inputs without touching the reviewing rules themselves.
+      # Inputs enter via env and are spliced with bash string substitution —
+      # never expression-interpolated into the script body — so an input
+      # value cannot inject into this script. Verbatim prompt blocks use
+      # QUOTED heredocs ('BLOCK') so the prompt's backticks and $(...)
+      # examples are never executed here.
+      - name: Compose review prompt
+        id: prompt
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REQUIRED_CHECK: ${{ inputs.required_check }}
+          GENERATED_PATHS: ${{ inputs.generated_paths }}
+          GENERATED_PATHS_NOTE: ${{ inputs.generated_paths_note }}
+          EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
+        run: |
+          P="$(mktemp)"
+
+          printf 'REPO: %s\nPR NUMBER: %s\n\n' "$REPO" "$PR_NUMBER" >>"$P"
+
+          cat >>"$P" <<'BLOCK'
+          Review this pull request. The PR branch is already checked out in
+          the current working directory. Inspect the changes with
+          `gh pr diff`. To read individual files, use the Read, Grep, and
+          Glob tools — do NOT use git, cat, sed, grep, or find via Bash: only
+          the `gh pr` subcommands below are permitted, and any other Bash
+          command is denied and just wastes turns.
+          BLOCK
+
+          if [ -n "$GENERATED_PATHS" ]; then
+            read -r -d '' T <<'BLOCK' || true
+          Some PRs commit generated data under `__PATHS__` — machine-written
+          output, not hand-authored code, and a single change can add
+          thousands of lines.__NOTE__
+          Run `gh pr diff --name-only` first; if any changed paths match
+          those patterns, skim past those hunks in the full diff without
+          analyzing their content, and just note the file/line count in
+          your summary. Spend your review effort on the non-generated
+          paths only.
+          BLOCK
+            note=""
+            if [ -n "$GENERATED_PATHS_NOTE" ]; then note=" ${GENERATED_PATHS_NOTE}"; fi
+            T="${T//__PATHS__/${GENERATED_PATHS}}"
+            T="${T//__NOTE__/${note}}"
+            printf '\n%s\n' "$T" >>"$P"
+          fi
+
+          cat >>"$P" <<'BLOCK'
+
+          Focus on high-signal problems in the changed code only:
+          - Bugs, logic errors, and unhandled edge cases
+          - Security issues
+          - Clear violations of guidelines in any relevant CLAUDE.md (root or a
+            CLAUDE.md in a parent directory of the changed file)
+
+          Skip nitpicks, style preferences, and pre-existing issues.
+          BLOCK
+
+          if [ -n "$EXTRA_INSTRUCTIONS" ]; then
+            printf '\n%s\n' "$EXTRA_INSTRUCTIONS" >>"$P"
+          fi
+
+          if [ -n "$REQUIRED_CHECK" ]; then
+            read -r -d '' T <<'BLOCK' || true
+          You cannot run tests, and that is never a reason to avoid a
+          verdict: the `__CHECK__` check runs this repository's automated
+          test suite against this head commit. Read its result with
+          `gh pr view __PR__ --json statusCheckRollup`:
+          - SUCCESS — the suite passes. Do not call your review unverified
+            merely because you did not run the tests yourself.
+          - FAILURE — that is a significant issue on its own. Request
+            changes and say which check failed.
+          - Still pending — review the code on its merits and say in one
+            line that `__CHECK__` had not finished. Pending tests are not
+            grounds for withholding a verdict.
+          BLOCK
+            T="${T//__CHECK__/${REQUIRED_CHECK}}"
+          else
+            read -r -d '' T <<'BLOCK' || true
+          You cannot run tests, and this repository has no designated check
+          for you to read — that is still never a reason to avoid a verdict.
+          Review the code on its merits.
+          BLOCK
+          fi
+          T="${T//__PR__/${PR_NUMBER}}"
+          printf '\n%s\n' "$T" >>"$P"
+
+          read -r -d '' T <<'BLOCK' || true
+          Leave feedback with `mcp__github_inline_comment__create_inline_comment`
+          for each specific issue (one comment per issue, on the relevant line).
+
+          Then submit exactly ONE formal review verdict for PR
+          #__PR__. First write your summary
+          to a file named `review-body.md` in the repository root using the
+          Write tool (this keeps the command below free of shell quoting).
+
+          Your verdict MUST agree with your own summary. Before running the
+          command, re-read what you wrote:
+          - If your summary says the changes are correct, that you found no
+            bugs / security issues / CLAUDE.md violations, or describes what
+            you found as "minor", "not blocking", "not a blocker", "a nit",
+            or "worth a follow-up" — that is an APPROVAL. Approve.
+          - If your summary says something should be fixed "before merge",
+            calls anything a "real bug", or gives the author an imperative
+            ("either wire a consumer or fix the comment") — that is a CHANGE
+            REQUEST. Request changes.
+          - Do NOT write a summary that states one verdict and then file a
+            different one. A finding you are unwilling to block on is an
+            approval with a note, not a neutral review.
+
+          "Significant" means it would produce wrong output, corrupt or
+          delete data, leak a secret, cost money unexpectedly, break a
+          documented interface, or violate an explicit CLAUDE.md
+          requirement. Anything else is not significant.
+
+          Run ONE of these — nothing else:
+          - Significant issues found:
+            `gh pr review __PR__ --request-changes --body-file review-body.md`
+          - Correct, no significant issues:
+            `gh pr review __PR__ --approve --body-file review-body.md`
+          - The decision is not yours to make even in principle — a product,
+            research, or cost/quality tradeoff, or a public-facing breaking
+            change needing an owner's sign-off:
+            `gh pr review __PR__ --comment --body-file review-body.md`
+            If you use this, the body MUST open with the single specific
+            question a human has to answer. This verdict fails the review
+            check and requests review from a maintainer, so never reach for
+            it to avoid choosing.
+          Always use `--body-file`; never pass the summary inline with
+          `--body "..."`. Do NOT use command substitution `$(...)`, pipes, or
+          heredocs in any command — they are blocked in this environment and
+          the command will silently fail to run. Never merge the PR; a human
+          decides whether to merge.
+          BLOCK
+          T="${T//__PR__/${PR_NUMBER}}"
+          printf '\n%s\n' "$T" >>"$P"
+
+          delim="PROMPT_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          {
+            echo "prompt<<${delim}"
+            cat "$P"
+            echo "${delim}"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -72,92 +278,7 @@ jobs:
           # Without this the action rejects bot-initiated runs. Narrow to specific
           # bot names instead of '*' if you want to restrict which bots trigger it.
           allowed_bots: "*"
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
-
-            Review this pull request. The PR branch is already checked out in
-            the current working directory. Inspect the changes with
-            `gh pr diff`. To read individual files, use the Read, Grep, and
-            Glob tools — do NOT use git, cat, sed, grep, or find via Bash: only
-            the `gh pr` subcommands below are permitted, and any other Bash
-            command is denied and just wastes turns.
-
-            Some PRs commit fresh pipeline-run output under `outputs/**` as
-            reviewable examples (see CLAUDE.md's "Committed run outputs are
-            deliberate" section) — this is generated data, not hand-authored
-            code, and a single run can add thousands of lines of JSONL. Run
-            `gh pr diff --name-only` first; if any changed paths are under
-            `outputs/`, skim past those hunks in the full diff without
-            analyzing their content, and just note the file/line count in
-            your summary. Spend your review effort on the non-generated code
-            paths only.
-
-            Focus on high-signal problems in the changed code only:
-            - Bugs, logic errors, and unhandled edge cases
-            - Security issues
-            - Clear violations of guidelines in any relevant CLAUDE.md (root or a
-              CLAUDE.md in a parent directory of the changed file)
-
-            Skip nitpicks, style preferences, and pre-existing issues.
-
-            You cannot run tests, and that is never a reason to avoid a
-            verdict: the `smoke` check runs `compileall` plus the full pytest
-            suite against this head commit. Read its result with
-            `gh pr view ${{ github.event.pull_request.number }} --json statusCheckRollup`:
-            - SUCCESS — the suite passes. Do not call your review unverified
-              merely because you did not run pytest yourself.
-            - FAILURE — that is a significant issue on its own. Request
-              changes and say which check failed.
-            - Still pending — review the code on its merits and say in one
-              line that `smoke` had not finished. Pending tests are not
-              grounds for withholding a verdict.
-
-            Leave feedback with `mcp__github_inline_comment__create_inline_comment`
-            for each specific issue (one comment per issue, on the relevant line).
-
-            Then submit exactly ONE formal review verdict for PR
-            #${{ github.event.pull_request.number }}. First write your summary
-            to a file named `review-body.md` in the repository root using the
-            Write tool (this keeps the command below free of shell quoting).
-
-            Your verdict MUST agree with your own summary. Before running the
-            command, re-read what you wrote:
-            - If your summary says the changes are correct, that you found no
-              bugs / security issues / CLAUDE.md violations, or describes what
-              you found as "minor", "not blocking", "not a blocker", "a nit",
-              or "worth a follow-up" — that is an APPROVAL. Approve.
-            - If your summary says something should be fixed "before merge",
-              calls anything a "real bug", or gives the author an imperative
-              ("either wire a consumer or fix the comment") — that is a CHANGE
-              REQUEST. Request changes.
-            - Do NOT write a summary that states one verdict and then file a
-              different one. A finding you are unwilling to block on is an
-              approval with a note, not a neutral review.
-
-            "Significant" means it would produce wrong output, corrupt or
-            delete data, leak a secret, cost money unexpectedly, break a
-            documented interface, or violate an explicit CLAUDE.md
-            requirement. Anything else is not significant.
-
-            Run ONE of these — nothing else:
-            - Significant issues found:
-              `gh pr review ${{ github.event.pull_request.number }} --request-changes --body-file review-body.md`
-            - Correct, no significant issues:
-              `gh pr review ${{ github.event.pull_request.number }} --approve --body-file review-body.md`
-            - The decision is not yours to make even in principle — a product,
-              research, or cost/quality tradeoff, or a public-facing breaking
-              change needing an owner's sign-off:
-              `gh pr review ${{ github.event.pull_request.number }} --comment --body-file review-body.md`
-              If you use this, the body MUST open with the single specific
-              question a human has to answer. This verdict fails the review
-              check and requests review from a maintainer, so never reach for
-              it to avoid choosing.
-            Always use `--body-file`; never pass the summary inline with
-            `--body "..."`. Do NOT use command substitution `$(...)`, pipes, or
-            heredocs in any command — they are blocked in this environment and
-            the command will silently fail to run. Never merge the PR; a human
-            decides whether to merge.
+          prompt: ${{ steps.prompt.outputs.prompt }}
           # The action denies comment-posting tools by default; grant the inline
           # comment tool plus the gh subcommands the review needs, or it reviews
           # but cannot post its findings. `Write` lets the review compose its
@@ -185,6 +306,7 @@ jobs:
           claude_args: |
             --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
             --disallowedTools "Task"
+            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
@@ -210,14 +332,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ESCALATION_LABEL: ${{ inputs.escalation_label }}
           SINCE: ${{ steps.review-start.outputs.ts }}
           ACTION_OUTCOME: ${{ steps.claude-review.outcome }}
           EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
         run: |
           # Only enforce when the action actually ran a review. The action
           # self-skips — exiting "success" with no execution output — when it
-          # cannot run, most commonly on a PR that edits this workflow (the
-          # action requires the file to match the default branch). That is not a
+          # cannot run, most commonly on a PR that edits this workflow or its
+          # caller (the action requires the file to match the default branch). That is not a
           # review failure. The original bug is distinguishable: there the action
           # ran to completion (an execution_file exists) but posted no verdict.
           if [ "${ACTION_OUTCOME}" != "success" ]; then
@@ -235,7 +358,7 @@ jobs:
             # label the PR and request a human — the same routing a neutral
             # verdict gets, for the same reason: a human has to do the reviewing.
             echo "verdict=NOT_REVIEWED" >> "$GITHUB_OUTPUT"
-            echo "::warning::This PR received no automated review — the action self-skipped, which happens when a PR edits the review workflow (the action only runs the copy on the default branch). Requesting a human reviewer instead."
+            echo "::warning::This PR received no automated review — the action self-skipped, which happens when a PR edits the review workflow or its caller (the action only runs the workflow copy on the default branch). Requesting a human reviewer instead."
             exit 0
           fi
           if [ -z "${SINCE}" ]; then
@@ -282,7 +405,7 @@ jobs:
               # PR; the bot has since committed to a binary call. 404 when the
               # label isn't present is the normal case, hence the discard.
               gh api -X DELETE \
-                "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels/needs-human-review" \
+                "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels/$(printf %s "${ESCALATION_LABEL}" | jq -sRr @uri)" \
                 >/dev/null 2>&1 || true
               exit 0
               ;;
@@ -329,7 +452,8 @@ jobs:
       #   COMMENTED    - the reviewer looked but wouldn't commit to a verdict. A
       #                  comment-only review neither blocks nor unblocks, so it
       #                  sat inert with nobody notified.
-      #   NOT_REVIEWED - the action self-skipped, so nothing was reviewed at all.
+      #   NOT_REVIEWED - the action self-skipped (a PR edited this workflow or
+      #                  its caller), so nothing was reviewed at all.
       #                  This reads on the PR page as a fast green `claude-review`
       #                  and is therefore worse: it looks like a pass.
       #
@@ -338,10 +462,11 @@ jobs:
       # verdict fails it, a self-skip does not, per 663c7e2); this step is about
       # making the state visible on the PR itself rather than only in a run log.
       #
-      # The label is `needs-human-review`, NOT the existing `needs-human`:
-      # claude-review-fix.yml treats `needs-human` on a PR as an absolute stop
-      # for the auto-fixer ("a human must clear it first"), so reusing it would
-      # permanently disarm automated fixes for every escalated PR.
+      # The label name comes from the `escalation_label` input (default
+      # `needs-human-review`). Pick a label no other automation assigns meaning
+      # to: in the repo this was extracted from, reusing the auto-fixer's
+      # `needs-human` stop label would have permanently disarmed automated
+      # fixes for every escalated PR.
       - name: Request human review when the bot cannot supply one
         if: >-
           always() && !cancelled() &&
@@ -352,9 +477,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
-          # Maintainers who adjudicate judgment calls. Both repo admins, and the
-          # only two humans who have ever reviewed here.
-          ESCALATE_TO: "Deco354 Liconstan"
+          # Maintainers who adjudicate judgment calls: space-separated logins
+          # from the caller's `escalate_to` input; empty means label-only.
+          ESCALATE_TO: ${{ inputs.escalate_to }}
+          ESCALATION_LABEL: ${{ inputs.escalation_label }}
         run: |
           case "${VERDICT}" in
             NOT_REVIEWED) why="no automated review ran on this PR (the action self-skipped)" ;;
@@ -364,9 +490,9 @@ jobs:
 
           # Skip maintainers who already have a pending request. This matters more
           # than it used to: NOT_REVIEWED fires on every push to a PR that edits
-          # this workflow, so without deduping a long-running workflow PR would
-          # re-POST the same reviewers on each push. (pr-stall-sweep.yml deduped
-          # for the same reason.)
+          # this workflow or its caller, so without deduping a long-running
+          # workflow PR would re-POST the same reviewers on each push. (The
+          # origin repo's stall sweep deduped for the same reason.)
           pending=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/requested_reviewers" \
             --jq '[.users[].login] | join(" ")' 2>/dev/null || echo "")
 
@@ -385,15 +511,15 @@ jobs:
           reviewers="$(echo "${reviewers}" | tr -s ' ' | sed 's/^ //;s/ $//')"
 
           gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" \
-            -f "labels[]=needs-human-review" >/dev/null 2>&1 \
-            && echo "✓ Labeled needs-human-review." \
-            || echo "::warning::Could not apply the needs-human-review label."
+            -f "labels[]=${ESCALATION_LABEL}" >/dev/null 2>&1 \
+            && echo "✓ Labeled ${ESCALATION_LABEL}." \
+            || echo "::warning::Could not apply the ${ESCALATION_LABEL} label."
 
           if [ -z "${reviewers}" ]; then
             if [ -n "${pending}" ]; then
               echo "✓ ${why}; review already pending from ${pending}, so nothing to re-request."
             else
-              echo "::warning::${why}, but there is no eligible reviewer to request (PR author ${PR_AUTHOR} is the only configured maintainer). The needs-human-review label is the only signal."
+              echo "::warning::${why}, but there is no eligible reviewer to request (no maintainers are configured via escalate_to, or the PR author is the only one). The ${ESCALATION_LABEL} label is the only signal."
             fi
             exit 0
           fi
@@ -407,6 +533,6 @@ jobs:
           if gh api -X POST "repos/${{ github.repository }}/pulls/${PR_NUMBER}/requested_reviewers" ${args} >/dev/null 2>&1; then
             echo "✓ Requested review from: ${reviewers} (${why})"
           else
-            echo "::warning::Could not request review from ${reviewers}; the needs-human-review label still stands."
+            echo "::warning::Could not request review from ${reviewers}; the ${ESCALATION_LABEL} label still stands."
           fi
 

@@ -1,4 +1,4 @@
-name: Claude Code
+name: Claude mention handler (reusable)
 
 # Reusable workflow: consuming repos invoke this from a small caller that
 # carries the four mention triggers (issue_comment, pull_request_review_comment,
