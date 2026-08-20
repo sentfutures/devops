@@ -36,18 +36,34 @@ this PR`).
 
 ## Installing on a repo
 
-Steps 1–2 need an org admin once per repo. Steps 3–5 anyone with write access
-can do — or paste this whole section to Claude Code with: *"install the
-sentfutures review bot on this repo, following the sentfutures/devops
+### The one-time org setup (do this once, then no repo ever needs an admin)
+
+Ask an org owner, in one sitting: install the **Claude GitHub App** for
+**All repositories** (Org Settings → GitHub Apps), and create the
+**`CLAUDE_CODE_OAUTH_TOKEN`** org secret — the shared bot account's token,
+never a personal one — with **All repositories** access (Org Settings →
+Secrets and variables → Actions). Every step below is then doable by anyone
+with write access, or by pasting this section to Claude Code with: *"install
+the sentfutures review bot on this repo, following the sentfutures/devops
 README"*.
 
-1. **Claude GitHub App** — an org admin adds the repo to the app's
-   installation (Org Settings → GitHub Apps → Claude → Repository access).
-   Without this the bot cannot authenticate or post as claude[bot].
-2. **Token access** — an org admin adds the repo to the
-   `CLAUDE_CODE_OAUTH_TOKEN` org secret's selected-repositories list (Org
-   Settings → Secrets and variables → Actions). This is a shared bot account
-   created for this purpose — never substitute a personal token.
+### If the org-wide setup hasn't happened
+
+A **repo admin** can do both prerequisites for their own repo with no org
+admin involved — this is exactly how animal-welfare-data-pipeline was set up
+(its secret is repo-level, created 2026-07-01):
+
+1. **Claude GitHub App** — run `/install-github-app` from Claude Code inside
+   the repo; it walks through the app install and creates the repo secret.
+   When it asks for credentials, use the shared bot account's token, not your
+   own. (Manual equivalent: install the app for the repo, then
+   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo sentfutures/<repo>`.) If
+   GitHub refuses the app install, that one step needs an org owner.
+2. Trade-off to know: the token value is then stored per repo, so rotating
+   the shared token means updating every repo that did this.
+
+### Per repo
+
 3. **Label** — create the `needs-human-review` label in the repo (Issues →
    Labels). A missing label only degrades to a warning in the run log, so do
    this up front where it's visible.
