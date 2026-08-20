@@ -1,0 +1,42 @@
+name: Selftest — Claude PR review bot
+
+# This repo's own caller of the shared review workflow — and the test harness
+# for changes to it. It calls the workflow by LOCAL PATH, so a PR editing
+# claude-pr-review.yml is reviewed by the PR branch's OWN version of the bot:
+# you watch the modified bot review your change before it can merge. This is
+# also why the selftest is a required check on main — a change that breaks the
+# bot cannot land, and therefore (see release.yml) cannot release.
+#
+# Known expected behavior: the underlying action self-skips on a PR that edits
+# a workflow file (it only runs the copy on the default branch), so a PR
+# touching these workflows may land in the NOT_REVIEWED path — the check stays
+# green and a human reviewer is requested. That path is itself part of what
+# this harness exercises.
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, edited]
+
+jobs:
+  review:
+    uses: ./.github/workflows/claude-pr-review.yml
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    with:
+      escalate_to: "Deco354"
+      extra_instructions: |
+        This repository hosts the org's shared GitHub Actions workflows — the
+        files under .github/workflows/ ARE the product, and most PRs change
+        them. Pay particular attention to:
+        - Changes to the verdict-verification step's jq pipeline or the tool
+          allowlist: each line encodes a past production incident (see the
+          inline comments); flag any change that removes or weakens one.
+        - Shell quoting and injection: workflow inputs must only enter run
+          scripts via env, never by expression interpolation into the script
+          body.
+        - The input surface: a new input needs a description, a safe default,
+          and README documentation in the same PR.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

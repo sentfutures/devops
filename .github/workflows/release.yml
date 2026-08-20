@@ -1,0 +1,38 @@
+name: Release — move v1 on main
+
+# Merging to main IS the release: this moves the `v1` tag every consuming
+# repo's caller pins to the new HEAD. There is no manual tag ritual — the
+# safety gate is branch protection on this repo, which requires the selftest
+# (the changed bot reviewing the very PR that changes it) before a merge, so
+# v1 can only ever advance past a commit where the bot demonstrably worked.
+#
+# Rollback: point v1 back at the previous commit —
+#   git push origin +<old-sha>:refs/tags/v1
+# (or from a checkout: git tag -f v1 <old-sha> && git push -f origin v1).
+#
+# A breaking change (renamed/removed input) must NOT ride v1: tag it v2 by
+# hand, update the callers/ templates to @v2, and note it in the README
+# changelog. Consumers move majors deliberately, one line in their caller.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-v1
+  cancel-in-progress: false
+
+jobs:
+  move-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Move v1 to HEAD
+        run: |
+          git tag -f v1 "$GITHUB_SHA"
+          git push -f origin refs/tags/v1
+          echo "v1 -> $GITHUB_SHA"
