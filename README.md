@@ -47,6 +47,18 @@ with write access, or by pasting this section to Claude Code with: *"install
 the sentfutures review bot on this repo, following the sentfutures/devops
 README"*.
 
+Why all-repositories is acceptable here: the token authenticates to Anthropic
+only — GitHub write access (posting as claude[bot]) comes from the GitHub
+App's own per-run token, never this secret — and the bot account is a
+dedicated subscription with no metered billing, so a leaked token buys an
+attacker rate-limited Claude usage until rotation, not money and not repo
+access. Two habits are the compensating controls: **rotate the token** if
+reviews start failing inexplicably (someone else draining the usage windows
+is what that looks like) or if a Claude workflow nobody recognizes appears in
+a repo's CI; and **note the token's expiry** (subscription OAuth tokens last
+about a year — `claude setup-token` prints the date) somewhere it will be
+seen before the bot goes quiet org-wide.
+
 ### If the org-wide setup hasn't happened
 
 A **repo admin** can do both prerequisites for their own repo with no org
