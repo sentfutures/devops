@@ -1,0 +1,14 @@
+{
+    "name": "sentfutures",
+    "owner": {
+        "name": "Sentient Futures",
+        "url": "https://sentientfutures.ai"
+    },
+    "plugins": [
+        {
+            "name": "review-bot",
+            "source": "./plugins/review-bot",
+            "description": "Operate the org's Claude PR review bot from any repo: /install-review-bot onboards the current repository, /disable-review-bot is the emergency stop."
+        }
+    ]
+}

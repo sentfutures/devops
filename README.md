@@ -36,68 +36,49 @@ this PR`).
 
 ## Installing on a repo
 
-### The one-time org setup (do this once, then no repo ever needs an admin)
+> **Org setup status: DONE for sentfutures (2026-08-20).** The Claude GitHub
+> App covers all repositories and the `CLAUDE_CODE_OAUTH_TOKEN` org secret is
+> available to all repositories — installing on a new org repo needs **no
+> admin steps at all**. (What that setup was and why its scoping is safe:
+> see "The org setup" near the end of this README.)
 
-Ask an org owner, in one sitting: install the **Claude GitHub App** for
-**All repositories** (Org Settings → GitHub Apps), and create the
-**`CLAUDE_CODE_OAUTH_TOKEN`** org secret — the shared bot account's token,
-never a personal one — with **All repositories** access (Org Settings →
-Secrets and variables → Actions). Every step below is then doable by anyone
-with write access, or by pasting this section to Claude Code with: *"install
-the sentfutures review bot on this repo, following the sentfutures/devops
-README"*.
+### The fast path — one skill
 
-Why all-repositories is acceptable here: the token authenticates to Anthropic
-only — GitHub write access (posting as claude[bot]) comes from the GitHub
-App's own per-run token, never this secret — and the bot account is a
-dedicated subscription with no metered billing, so a leaked token buys an
-attacker rate-limited Claude usage until rotation, not money and not repo
-access. Two habits are the compensating controls: **rotate the token** if
-reviews start failing inexplicably (someone else draining the usage windows
-is what that looks like) or if a Claude workflow nobody recognizes appears in
-a repo's CI; and **note the token's expiry** (subscription OAuth tokens last
-about a year — `claude setup-token` prints the date) somewhere it will be
-seen before the bot goes quiet org-wide.
+One-time, on your own machine:
 
-### If the org-wide setup hasn't happened
+```
+/plugin marketplace add sentfutures/devops
+/plugin install review-bot@sentfutures
+```
 
-A **repo admin** can do both prerequisites for their own repo with no org
-admin involved — this is exactly how animal-welfare-data-pipeline was set up
-(its secret is repo-level, created 2026-07-01):
+Then, inside any repo you want the bot on, run **`/install-review-bot`** and
+answer its questions (mainly: which maintainers to page when the bot can't
+decide). It discovers the repo's CI check name, creates the
+`needs-human-review` label, adds the two caller workflows, installs the
+`pr-review-watch` skill, and opens a setup PR for a human to review and
+merge. The same plugin ships **`/disable-review-bot`** — the emergency stop
+(see "Disabling the bot" below).
 
-1. **Claude GitHub App** — run `/install-github-app` from Claude Code inside
-   the repo; it walks through the app install and creates the repo secret.
-   When it asks for credentials, use the shared bot account's token, not your
-   own. (Manual equivalent: install the app for the repo, then
-   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo sentfutures/<repo>`.) If
-   GitHub refuses the app install, that one step needs an org owner.
-2. Trade-off to know: the token value is then stored per repo, so rotating
-   the shared token means updating every repo that did this.
+### The manual path
 
-### Per repo
-
-3. **Label** — create the `needs-human-review` label in the repo (Issues →
-   Labels). A missing label only degrades to a warning in the run log, so do
-   this up front where it's visible.
-4. **Branch protection — decide, don't inherit.** See
-   [the decision every repo owes](#branch-protection-the-decision-every-repo-owes) below.
-5. **Add the workflows** — either path:
-   - *Point-and-click*: repo → Actions → New workflow → under **"By
-     sentfutures"** choose **"Claude PR review bot — reviews every PR"** →
-     Configure → replace the two `FILL_ME_IN` values (`required_check`: your
-     CI check's name as it appears on a PR, or delete the line if you have
-     none; `escalate_to`: maintainer GitHub logins) → commit. Repeat for
-     **"Claude @mention handler — on-demand"** (nothing to fill in).
-   - *Copy the files*: `callers/claude-pr-review.caller.yml` and
-     `callers/claude-mention.caller.yml` from this repo into your repo's
-     `.github/workflows/`, filling the same two values.
-
-   Then copy `skills/pr-review-watch/` from this repo into your repo's
+1. **Label** — create `needs-human-review` in the repo (Issues → Labels). A
+   missing label only degrades to a warning in the run log, so do it up
+   front where it's visible.
+2. **Workflows** — repo → Actions → New workflow → under **"By sentfutures"**
+   choose **"Claude PR review bot — reviews every PR"** → Configure → replace
+   the two `FILL_ME_IN` values (`required_check`: your CI check's name as it
+   appears on a PR, or delete the line if there is none; `escalate_to`:
+   maintainer GitHub logins) → commit. Repeat for **"Claude @mention handler
+   — on-demand"** (nothing to fill in). Equivalent: copy both files from this
+   repo's `callers/` into your `.github/workflows/`.
+3. **Skill** — copy `skills/pr-review-watch/` from this repo into your repo's
    `.claude/skills/` and complete its "In this repo" fill-in bullets from
    your repo's own CLAUDE.md and CI. That skill is how a Claude Code session
    responds to the bot's reviews: verify every claim against the code before
    complying, never post on the PR, escalate disagreements.
-6. **Verify** — open a trivial test PR (one-line README change) and watch the
+4. **Branch protection — decide, don't inherit.** See
+   [the decision every repo owes](#branch-protection-the-decision-every-repo-owes).
+5. **Verify** — open a trivial test PR (one-line README change) and watch the
    run: the review posts inline comments and a verdict, "Verify a review
    verdict was posted" goes green, and the escalation step is skipped. Then
    comment `@claude say hello` on the PR to confirm the mention handler.
@@ -123,6 +104,19 @@ All inputs: `required_check`, `generated_paths` + `generated_paths_note`
 `model`. Each is documented at the top of `claude-pr-review.yml`. What is
 *not* an input — the verdict rules, the tool allowlist, the verification
 logic — is deliberately unreachable from a caller.
+
+## Disabling the bot (when something goes wrong)
+
+- **One repo misbehaving** → run **`/disable-review-bot`** in that repo, or
+  manually: `gh workflow disable "Claude PR review bot"` (re-enable later
+  with `gh workflow enable`). **If `review / claude-review` is a required
+  status check there, also remove it from branch protection** — otherwise
+  every PR waits forever on a check that will never run.
+- **Every repo broken at once, right after a merge to this repo** → the
+  problem is the shared release, not the consumers: a devops admin re-points
+  the `v1` tag at the previous commit (the exact command is in
+  `release.yml`'s header) and all repos are back on the old bot on their
+  next PR event.
 
 ## Branch protection: the decision every repo owes
 
@@ -181,8 +175,52 @@ Three tiers, in order of how often they should happen:
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
 | Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
 
+## The org setup (done for sentfutures 2026-08-20 — kept for reference)
+
+What the one-time setup was, should another org adopt this or the secret need
+recreating:
+
+Ask an org owner, in one sitting: install the **Claude GitHub App** for
+**All repositories** (Org Settings → GitHub Apps), and create the
+**`CLAUDE_CODE_OAUTH_TOKEN`** org secret — the shared bot account's token,
+never a personal one — with **All repositories** access (Org Settings →
+Secrets and variables → Actions). Every step below is then doable by anyone
+with write access, or by pasting this section to Claude Code with: *"install
+the sentfutures review bot on this repo, following the sentfutures/devops
+README"*.
+
+Why all-repositories is acceptable here: the token authenticates to Anthropic
+only — GitHub write access (posting as claude[bot]) comes from the GitHub
+App's own per-run token, never this secret — and the bot account is a
+dedicated subscription with no metered billing, so a leaked token buys an
+attacker rate-limited Claude usage until rotation, not money and not repo
+access. Two habits are the compensating controls: **rotate the token** if
+reviews start failing inexplicably (someone else draining the usage windows
+is what that looks like) or if a Claude workflow nobody recognizes appears in
+a repo's CI; and **note the token's expiry** (subscription OAuth tokens last
+about a year — `claude setup-token` prints the date) somewhere it will be
+seen before the bot goes quiet org-wide.
+
+### Per-repo fallback, if an org ever can't do the org-wide setup
+
+A **repo admin** can do both prerequisites for their own repo with no org
+admin involved — this is exactly how animal-welfare-data-pipeline was set up
+(its secret is repo-level, created 2026-07-01):
+
+1. **Claude GitHub App** — run `/install-github-app` from Claude Code inside
+   the repo; it walks through the app install and creates the repo secret.
+   When it asks for credentials, use the shared bot account's token, not your
+   own. (Manual equivalent: install the app for the repo, then
+   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo sentfutures/<repo>`.) If
+   GitHub refuses the app install, that one step needs an org owner.
+2. Trade-off to know: the token value is then stored per repo, so rotating
+   the shared token means updating every repo that did this.
+
 ## Changelog
 
+- **v1, 2026-08-20** — org setup completed (app + secret, all repositories);
+  `review-bot` plugin added (`/install-review-bot`, `/disable-review-bot`);
+  runbook restructured around it.
 - **v1** — initial release: review bot + mention handler extracted from
   animal-welfare-data-pipeline (its `.github/workflows/claude-code-review.yml`
   and `claude.yml` remain in place there until that repo migrates to a
