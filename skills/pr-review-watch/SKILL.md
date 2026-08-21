@@ -32,13 +32,31 @@ gh pr view <N> --repo <owner/repo> \
   --json state,reviewDecision,mergeable,reviews,comments,statusCheckRollup
 ```
 
-`reviewDecision` is the fast answer: `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or empty. If feedback exists, skip to Step 3.
+`reviewDecision` reports the branch-protection review state, not the reviews
+themselves: on a repo whose protection requires reviews it reads `APPROVED` /
+`CHANGES_REQUESTED` / `REVIEW_REQUIRED` (bot approvals included), but on a
+repo without required reviews it stays EMPTY no matter what sits in
+`reviews` — verified both ways on this org's repos. Empty is therefore not
+"no feedback": read the `reviews` array itself. If feedback exists, skip to
+Step 3.
 
 ## Step 2: waiting, if it genuinely hasn't arrived
 
 Pick by how many notifications you need:
 
-**One notification when the review lands** — Bash with `run_in_background` and a loop that exits on the condition. This is the common case.
+**One notification when the review lands** — Bash with `run_in_background` and a loop that exits on the condition. Pick the condition by what you are waiting for:
+
+*The review bot* (the usual case) — wait on its check leaving `pending`, then read the reviews. This works on every repo, protected or not:
+
+```bash
+until bucket=$(gh pr checks <N> --repo <owner/repo> --json name,bucket \
+  -q '.[] | select(.name | contains("claude-review")) | .bucket'); \
+  [ -n "$bucket" ] && [ "$bucket" != "pending" ]; do
+  sleep 60
+done
+```
+
+*A human reviewer, on a repo whose branch protection requires reviews* — `reviewDecision` is reliable there, and only there:
 
 ```bash
 until [ -n "$(gh pr view <N> --repo <owner/repo> --json reviewDecision -q .reviewDecision)" ]; do
@@ -46,11 +64,13 @@ until [ -n "$(gh pr view <N> --repo <owner/repo> --json reviewDecision -q .revie
 done
 ```
 
-A caveat on that condition: a **comment-only** review does not set `reviewDecision`, so a loop waiting on it alone can hang after the reviewer has actually spoken. When the reviewer is a bot with its own check, wait on the check leaving `pending` instead, then read the reviews:
+Never use that loop on a repo without required reviews: `reviewDecision` stays empty there no matter what gets posted — an APPROVED bot review included — and a comment-only review never sets it anywhere, so the loop hangs forever after the reviewer has actually spoken. Universal fallback for every other case — poll the reviews list itself for a new bodied review (add a `submitted_at` filter against when you started waiting if the PR already carries older reviews):
 
 ```bash
-bucket=$(gh pr checks <N> --repo <owner/repo> --json name,bucket \
-  -q '.[] | select(.name | contains("claude-review")) | .bucket')
+until [ -n "$(gh api repos/<owner>/<repo>/pulls/<N>/reviews --paginate \
+  | jq -r -s 'add // [] | [.[] | select((.body|length) > 0)] | last | .state // ""')" ]; do
+  sleep 60
+done
 ```
 
 **One notification per new comment, indefinitely** — the `Monitor` tool with `persistent: true`, polling `gh api repos/<owner>/<repo>/issues/<N>/comments?since=<ts>` and emitting a line per new comment. Only worth it for an active back-and-forth.
