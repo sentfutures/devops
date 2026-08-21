@@ -1,5 +1,6 @@
 {
     "name": "sentfutures",
+    "description": "Sentient Futures' shared Claude Code tooling: skills for installing and operating the org's PR review bot.",
     "owner": {
         "name": "Sentient Futures",
         "url": "https://sentientfutures.ai"

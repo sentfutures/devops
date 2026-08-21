@@ -1,5 +1,9 @@
 {
     "name": "review-bot",
     "description": "Install and operate the sentfutures Claude PR review bot: /install-review-bot onboards the current repo, /disable-review-bot pauses it when something goes wrong.",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "author": {
+        "name": "Sentient Futures",
+        "url": "https://sentientfutures.ai"
+    }
 }
