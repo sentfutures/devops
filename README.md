@@ -59,6 +59,26 @@ decide). It discovers the repo's CI check name, creates the
 merge. The same plugin ships **`/disable-review-bot`** — the emergency stop
 (see "Disabling the bot" below).
 
+This works outside sentfutures too — on a personal repo or another org. This
+repo is public, so the `uses:` reference resolves from any owner; what does
+not come for free is the app-and-secret pair the org-wide setup provides, so
+do ["Per-repo fallback"](#per-repo-fallback-if-an-org-ever-cant-do-the-org-wide-setup)
+first and the skill will take it from there. Two things to expect off-org:
+
+- The install depends on **this repo staying public**. Making it private
+  breaks the cross-owner `uses:` for every outside consumer at once.
+- **Branch protection may be unavailable.** On a private repo on a free plan
+  GitHub returns `403: Upgrade to GitHub Pro or make this repository public`,
+  so `review / claude-review` cannot be required and the bot is advisory: its
+  approval gates nothing, its red check blocks nothing.
+
+**Solo-maintainer repos**: escalation degrades to label-only. GitHub rejects a
+review request naming a PR's own author (422), so when the sole maintainer is
+also the sole PR author the workflow drops them and nobody is paged — the
+`needs-human-review` label is the only signal that a PR went unreviewed. Fill
+`escalate_to` with their login anyway; it starts working the moment a second
+person opens a PR.
+
 ### The manual path
 
 1. **Label** — create `needs-human-review` in the repo (Issues → Labels). A

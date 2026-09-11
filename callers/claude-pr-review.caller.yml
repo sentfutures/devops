@@ -30,6 +30,11 @@ jobs:
       # tests (e.g. "smoke", "preview"). Delete the line if there is none.
       required_check: "FILL_ME_IN"
       # Space-separated GitHub logins to page when the bot can't decide.
+      # Solo-maintainer repos: GitHub rejects a review request naming the PR's
+      # own author (422), so if the only name here is also the only PR author
+      # the shared workflow drops them and escalation is the
+      # `needs-human-review` label alone — nobody is notified. Fill it in
+      # anyway; it starts working when a second person opens a PR.
       escalate_to: "FILL_ME_IN"
       # Optional — repo-specific review rules, appended to the prompt:
       # extra_instructions: |
