@@ -100,7 +100,11 @@ person opens a PR.
    [the decision every repo owes](#branch-protection-the-decision-every-repo-owes).
 5. **Verify** — open a trivial test PR (one-line README change) and watch the
    run: the review posts inline comments and a verdict, "Verify a review
-   verdict was posted" goes green, and the escalation step is skipped. Then
+   verdict was posted" goes green, and the escalation step is skipped. If you
+   set a `required_check`, also read the review's summary: it should refer to
+   that check's result, and must not say it could not read `statusCheckRollup`
+   (see the troubleshooting table). The first three signals all appear even
+   when the review cannot see CI, so the green is not enough on its own. Then
    comment `@claude say hello` on the PR to confirm the mention handler.
 
 ### Customizing what the bot looks for
@@ -194,6 +198,7 @@ Three tiers, in order of how often they should happen:
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
 | Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
+| Review says it got `Resource not accessible by integration` reading `statusCheckRollup` | Your caller is missing `actions: read` from its `permissions:` block. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — the caller has to. Copy the `permissions:` block from `callers/claude-pr-review.caller.yml`. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
 
@@ -238,6 +243,15 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **v1, 2026-09-21** — the review can now read its `required_check`. It had
+  always been told to, but was never granted `actions: read`, so
+  `statusCheckRollup` returned "Resource not accessible by integration" and the
+  FAILURE branch of that prompt block was unreachable: a PR with a red check was
+  eligible for a clean approval. **Action required for repos installed before
+  this**: add `actions: read` to your caller's `permissions:` block. Permissions
+  can only be reduced down a reusable-workflow chain, never elevated, so the
+  shared workflow cannot supply it for you — a caller without the line will fail
+  to start. New installs get it from the template.
 - **v1, 2026-08-20** — org setup completed (app + secret, all repositories);
   `review-bot` plugin added (`/install-review-bot`, `/disable-review-bot`);
   runbook restructured around it.
