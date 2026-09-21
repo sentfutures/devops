@@ -45,7 +45,13 @@ executable version of its install steps.
     cross-owner `uses:` and forces a transfer into the org.
 - Check `.github/workflows/` for existing files named `claude-pr-review.yml`
   or `claude-mention.yml` — if present, this repo may already be onboarded;
-  report instead of overwriting.
+  report instead of overwriting. When they are present, check one thing before
+  you report: does `claude-pr-review.yml`'s `permissions:` block include
+  `actions: read`? Repos onboarded before 2026-09-21 predate it, and without it
+  the review cannot read its `required_check` — it reports "Resource not
+  accessible by integration" in its summary and reviews blind to whether the
+  suite passed. Tell the user; the fix is that one line, copied from
+  `callers/claude-pr-review.caller.yml`.
 
 ## 2. Discover this repo's facts
 
@@ -110,3 +116,10 @@ should open a trivial test PR and expect inline comments + one verdict + a
 green `review / claude-review` check; and that testing the mention handler
 means **they** comment `@claude say hello` — comments are always posted by
 the human, never by you from their account.
+
+If you set a `required_check`, add one more thing to check on that test PR:
+the review's summary should **refer to the check's result**, and must not say
+it could not read `statusCheckRollup`. Inline comments, a verdict and a green
+check all appear even when the review cannot see CI, which is how that went
+unnoticed for 114 PRs on the origin repo — so it is worth naming as its own
+expectation rather than trusting the green.
