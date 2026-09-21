@@ -10,10 +10,13 @@ on:
     inputs:
       required_check:
         description: >-
-          Name of the repo's CI check (as it appears in statusCheckRollup) that
-          the reviewer reads instead of running tests, e.g. "smoke" or
-          "preview". Empty: the prompt says there is no check to read — which
-          is still never grounds for withholding a verdict.
+          Name of the repo's CI job whose result an approval must not
+          contradict, e.g. "smoke" or "preview". This is the *job* name as it
+          appears in the Actions API — normally the job id in your CI
+          workflow, or its `name:` if set. The review never reads it (it
+          cannot); the verify step checks it afterwards and fails this check
+          if the review approved a commit whose suite was red. Empty: no such
+          cross-check, and the prompt says there is no designated check.
         type: string
         required: false
         default: ""
@@ -98,11 +101,11 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      # Required for the review to read the `required_check` result. Without
-      # it `gh pr view --json statusCheckRollup` returns "Resource not
-      # accessible by integration" and the review says so in its summary —
-      # see the prompt's required_check block and claude-mention.yml, which
-      # has always granted this.
+      # Lets the verify step read `required_check`'s result via the Actions
+      # API, for the contradiction guard. NOT for the review: the agent's own
+      # token cannot read checks at all (statusCheckRollup needs the Checks
+      # permission, which claude-code-action cannot request), which is why
+      # the guard lives in the workflow rather than in the prompt.
       actions: read
 
     steps:
@@ -185,26 +188,36 @@ jobs:
             printf '\n%s\n' "$EXTRA_INSTRUCTIONS" >>"$P"
           fi
 
+          # The prompt deliberately does NOT ask the review to read CI. It
+          # cannot: `statusCheckRollup` is served by the Checks permission,
+          # which claude-code-action cannot request (`additional_permissions`
+          # accepts only `actions: read`), and `gh pr checks` is not in the
+          # tool allowlist. It used to try anyway and burn turns on a denied
+          # call — see Deco354/fragile-compassion#15, where it reported
+          # "Resource not accessible by integration" and reviewed blind.
+          #
+          # Test results are enforced after the fact instead, by the
+          # contradiction guard in the verify step below: an approval over a
+          # red suite fails this check and escalates. That is deterministic,
+          # costs no review latency, and does not depend on the model
+          # choosing to look.
           if [ -n "$REQUIRED_CHECK" ]; then
             read -r -d '' T <<'BLOCK' || true
-          You cannot run tests, and that is never a reason to avoid a
-          verdict: the `__CHECK__` check runs this repository's automated
-          test suite against this head commit. Read its result with
-          `gh pr view __PR__ --json statusCheckRollup`:
-          - SUCCESS — the suite passes. Do not call your review unverified
-            merely because you did not run the tests yourself.
-          - FAILURE — that is a significant issue on its own. Request
-            changes and say which check failed.
-          - Still pending — review the code on its merits and say in one
-            line that `__CHECK__` had not finished. Pending tests are not
-            grounds for withholding a verdict.
+          You cannot run tests and you cannot read CI results — do not try,
+          the calls are denied and will only waste turns. You do not need
+          them: this repository's `__CHECK__` check runs the suite against
+          this commit, and a separate automated step cross-checks your
+          verdict against its result after you finish. Review the code on
+          its merits and do not caveat your review over not having seen the
+          tests.
           BLOCK
             T="${T//__CHECK__/${REQUIRED_CHECK}}"
           else
             read -r -d '' T <<'BLOCK' || true
-          You cannot run tests, and this repository has no designated check
-          for you to read — that is still never a reason to avoid a verdict.
-          Review the code on its merits.
+          You cannot run tests and you cannot read CI results — do not try,
+          the calls are denied and will only waste turns. This repository
+          has no designated check anyway. That is still never a reason to
+          avoid a verdict: review the code on its merits.
           BLOCK
           fi
           T="${T//__PR__/${PR_NUMBER}}"
@@ -346,6 +359,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ESCALATION_LABEL: ${{ inputs.escalation_label }}
+          # Read by the contradiction guard below, not by the review.
+          REQUIRED_CHECK: ${{ inputs.required_check }}
           SINCE: ${{ steps.review-start.outputs.ts }}
           ACTION_OUTCOME: ${{ steps.claude-review.outcome }}
           EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
@@ -414,6 +429,70 @@ jobs:
           case "${verdict}" in
             APPROVED|CHANGES_REQUESTED)
               echo "✓ Claude submitted a ${verdict} verdict for ${HEAD_SHA}."
+
+              # Contradiction guard: an approval must not stand over a red
+              # suite. The review itself cannot read CI (see the prompt), so
+              # this is checked here instead of asked of the model — after the
+              # review, when the result is almost certainly settled. Measured
+              # durations: reviews run 2-3 min, `test` 13-26s, `smoke` 1-2
+              # min, so the wait below is nearly always a single poll.
+              #
+              # Deliberately NOT checked for CHANGES_REQUESTED: the bot has
+              # already blocked the PR, so a red suite adds nothing.
+              #
+              # Uses the Actions API, not statusCheckRollup — `actions: read`
+              # covers the former, and the Checks permission this job cannot
+              # get covers the latter.
+              if [ "${verdict}" = "APPROVED" ] && [ -n "${REQUIRED_CHECK}" ]; then
+                ci_deadline=$(( $(date +%s) + 90 ))
+                ci_state="UNKNOWN"
+                while :; do
+                  ci_row=""
+                  # Fetch once and test the call itself, not just its contents.
+                  # A caller missing `actions: read` 403s here, and an empty
+                  # result is indistinguishable from "CI has not started yet" —
+                  # without this the guard would poll the full 90s on every
+                  # approved review and then no-op silently. A successful call
+                  # always returns JSON, so empty means the call failed.
+                  runs_json=$(gh api \
+                        "repos/${{ github.repository }}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+                        2>/dev/null)
+                  if [ -z "$runs_json" ]; then
+                    echo "::warning::Could not list workflow runs for ${HEAD_SHA}, so the CI cross-check is being skipped. The usual cause is the caller's permissions: block missing 'actions: read' — see callers/claude-pr-review.caller.yml."
+                    break
+                  fi
+                  for run_id in $(printf '%s' "$runs_json" | jq -r '.workflow_runs[].id'); do
+                    ci_row=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+                      | jq -r --arg n "${REQUIRED_CHECK}" \
+                          '.jobs[] | select(.name == $n) | "\(.status)|\(.conclusion // "")"' \
+                      | tail -1)
+                    [ -n "$ci_row" ] && break
+                  done
+                  if [ -n "$ci_row" ] && [ "${ci_row%%|*}" = "completed" ]; then
+                    # Only `failure` and `timed_out` mean the suite actually
+                    # said no. `cancelled` and `stale` are superseded runs —
+                    # concurrency cancels them on every re-push — and reading
+                    # those as failures would fire this guard on healthy PRs.
+                    case "${ci_row##*|}" in
+                      failure|timed_out) ci_state="FAILED" ;;
+                      *)                 ci_state="OK" ;;
+                    esac
+                    break
+                  fi
+                  [ "$(date +%s)" -ge "$ci_deadline" ] && break
+                  sleep 10
+                done
+
+                if [ "${ci_state}" = "FAILED" ]; then
+                  echo "contradiction=true" >> "$GITHUB_OUTPUT"
+                  echo "::error::Claude approved ${HEAD_SHA}, but the ${REQUIRED_CHECK} check failed on that commit. An approval cannot stand over a failing suite, so this check fails and a human is being asked to look. The review body is still worth reading; it simply could not see CI."
+                  exit 1
+                fi
+                if [ "${ci_state}" = "UNKNOWN" ]; then
+                  echo "::notice::Could not settle ${REQUIRED_CHECK} for ${HEAD_SHA} within 90s, so the approval stands unchecked. Not a failure — CI is slower than the review on this repo."
+                fi
+              fi
+
               # Clear a stale escalation from an earlier neutral verdict on this
               # PR; the bot has since committed to a binary call. 404 when the
               # label isn't present is the normal case, hence the discard.
@@ -484,21 +563,30 @@ jobs:
         if: >-
           always() && !cancelled() &&
           (steps.verdict.outputs.verdict == 'COMMENTED' ||
-           steps.verdict.outputs.verdict == 'NOT_REVIEWED')
+           steps.verdict.outputs.verdict == 'NOT_REVIEWED' ||
+           steps.verdict.outputs.contradiction == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
+          CONTRADICTION: ${{ steps.verdict.outputs.contradiction }}
+          REQUIRED_CHECK: ${{ inputs.required_check }}
           # Maintainers who adjudicate judgment calls: space-separated logins
           # from the caller's `escalate_to` input; empty means label-only.
           ESCALATE_TO: ${{ inputs.escalate_to }}
           ESCALATION_LABEL: ${{ inputs.escalation_label }}
         run: |
-          case "${VERDICT}" in
-            NOT_REVIEWED) why="no automated review ran on this PR (the action self-skipped)" ;;
-            *)            why="the automated review reached no binary verdict" ;;
-          esac
+          # The contradiction case carries an APPROVED verdict, so it has to be
+          # tested before the verdict itself.
+          if [ "${CONTRADICTION}" = "true" ]; then
+            why="the review approved this PR but ${REQUIRED_CHECK} failed on that commit"
+          else
+            case "${VERDICT}" in
+              NOT_REVIEWED) why="no automated review ran on this PR (the action self-skipped)" ;;
+              *)            why="the automated review reached no binary verdict" ;;
+            esac
+          fi
           echo "Escalating: ${why}."
 
           # Skip maintainers who already have a pending request. This matters more
