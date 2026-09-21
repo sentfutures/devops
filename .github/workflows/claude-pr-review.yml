@@ -98,6 +98,12 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      # Required for the review to read the `required_check` result. Without
+      # it `gh pr view --json statusCheckRollup` returns "Resource not
+      # accessible by integration" and the review says so in its summary —
+      # see the prompt's required_check block and claude-mention.yml, which
+      # has always granted this.
+      actions: read
 
     steps:
       - name: Checkout repository
@@ -278,6 +284,13 @@ jobs:
           # Without this the action rejects bot-initiated runs. Narrow to specific
           # bot names instead of '*' if you want to restrict which bots trigger it.
           allowed_bots: "*"
+          # The job-level `actions: read` above governs the workflow's own
+          # GITHUB_TOKEN; this grants the same scope on the app token the
+          # agent actually runs `gh` with. Both are needed, which is why
+          # claude-mention.yml carries the pair too — omit this one and the
+          # review still cannot read the check.
+          additional_permissions: |
+            actions: read
           prompt: ${{ steps.prompt.outputs.prompt }}
           # The action denies comment-posting tools by default; grant the inline
           # comment tool plus the gh subcommands the review needs, or it reviews

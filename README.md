@@ -194,6 +194,7 @@ Three tiers, in order of how often they should happen:
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
 | Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
+| Review says it got `Resource not accessible by integration` reading `statusCheckRollup` | Your caller is missing `actions: read` from its `permissions:` block. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — the caller has to. Copy the `permissions:` block from `callers/claude-pr-review.caller.yml`. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
 
