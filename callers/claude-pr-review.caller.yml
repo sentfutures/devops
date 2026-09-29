@@ -25,7 +25,10 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # lets the review read your required_check's result
+      # Only used when required_check is set: the verify step reads that
+      # check's result to refuse an approval over a red suite. Without this
+      # line the cross-check is skipped with a warning in the run log.
+      actions: read
     with:
       # Name of this repo's CI check the reviewer reads instead of running
       # tests (e.g. "smoke", "preview"). Delete the line if there is none.

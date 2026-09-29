@@ -47,11 +47,12 @@ executable version of its install steps.
   or `claude-mention.yml` — if present, this repo may already be onboarded;
   report instead of overwriting. When they are present, check one thing before
   you report: does `claude-pr-review.yml`'s `permissions:` block include
-  `actions: read`? Repos onboarded before 2026-09-21 predate it, and without it
-  the review cannot read its `required_check` — it reports "Resource not
-  accessible by integration" in its summary and reviews blind to whether the
-  suite passed. Tell the user; the fix is that one line, copied from
-  `callers/claude-pr-review.caller.yml`.
+  `actions: read`? Repos onboarded before 2026-09-21 predate it. Without it the
+  CI cross-check of an approval (`required_check`) is skipped — the run log
+  warns and the approval stands unchecked — and on `v1` between 2026-09-21 and
+  2026-09-29 the workflow did not start at all (no check on the PR). Tell the
+  user; if the caller sets `required_check`, the fix is that one line, copied
+  from `callers/claude-pr-review.caller.yml`.
 
 ## 2. Discover this repo's facts
 
@@ -103,10 +104,13 @@ executable version of its install steps.
    from the heading.
 4. Open the PR. The body MUST open with a callout naming Claude as the author
    (e.g. a `> [!NOTE]` line), and MUST include a "How to test" section. Model
-   it on sentfutures/website#202. Include these two facts: the setup PR
+   it on sentfutures/website#202. Include these three facts: the setup PR
    itself gets no usable review (the action self-skips on PRs adding its own
-   workflow — the designed `NOT_REVIEWED` path), and branch protection is a
-   separate decision the PR does not make (link the devops README's
+   workflow — the designed `NOT_REVIEWED` path); branch protection is a
+   separate decision the PR does not make; and the recommended default is to
+   NOT make `review / claude-review` a required status check — the bot's
+   change requests still block under a pull-request rule, while a required
+   check that fails to report would freeze the repo (link the devops README's
    "Branch protection: the decision every repo owes").
 
 ## 4. Report to the user
