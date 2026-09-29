@@ -3,8 +3,9 @@ name: Claude PR review bot (reusable)
 # Reusable workflow: consuming repos invoke this from a ~15-line caller that
 # carries the `on: pull_request` triggers (including `edited`, which fires when
 # a stacked PR retargets its base and GitHub dismisses the standing approval)
-# and the permissions block. See callers/claude-pr-review.caller.yml and the
-# README in this repo.
+# and the permissions block — the job below declares none of its own and runs
+# with exactly what the caller grants (see the comment above its `steps:`).
+# See callers/claude-pr-review.caller.yml and the README in this repo.
 on:
   workflow_call:
     inputs:
@@ -96,17 +97,32 @@ jobs:
       cancel-in-progress: true
 
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-      id-token: write
-      # Lets the verify step read `required_check`'s result via the Actions
-      # API, for the contradiction guard. NOT for the review: the agent's own
-      # token cannot read checks at all (statusCheckRollup needs the Checks
-      # permission, which claude-code-action cannot request), which is why
-      # the guard lives in the workflow rather than in the prompt.
-      actions: read
+    # No `permissions:` here, on purpose: the job inherits the caller's grant.
+    # A called workflow can only keep or reduce what its caller passes, so a
+    # permission listed here is a hard requirement on every caller, checked at
+    # STARTUP — before any step, before the `if:` above. On 2026-09-21 this
+    # block gained `actions: read` for the contradiction guard below, and every
+    # caller without that line (this repo's own selftest included) stopped at
+    # "is requesting 'actions: read', but is only allowed 'actions: none'". A
+    # startup failure creates no check, no label and no escalation, so the
+    # review silently vanished from those PRs until 2026-09-29 — and where the
+    # check was required, the PR could not merge at all
+    # (Deco354/factory-farm-em#17; the README changelog has the story).
+    #
+    # The least-privilege block lives in callers/claude-pr-review.caller.yml.
+    # What each permission is for:
+    #   contents: read       — checkout
+    #   pull-requests: write — the verdict, inline comments, review requests
+    #   issues: write        — the escalation label
+    #   id-token: write      — the action's OIDC exchange for its app token
+    #   actions: read        — the contradiction guard's read of
+    #                          `required_check`. Optional: without it the guard
+    #                          warns and skips (see the verify step). NOT for
+    #                          the review: the agent's own token cannot read
+    #                          checks at all (statusCheckRollup needs the Checks
+    #                          permission, which claude-code-action cannot
+    #                          request), which is why the guard lives in the
+    #                          workflow rather than in the prompt.
 
     steps:
       - name: Checkout repository
@@ -442,7 +458,12 @@ jobs:
               #
               # Uses the Actions API, not statusCheckRollup — `actions: read`
               # covers the former, and the Checks permission this job cannot
-              # get covers the latter.
+              # get covers the latter. `actions: read` is the caller's to
+              # grant (this job inherits its permissions): a caller that sets
+              # required_check without it reaches the warning below and the
+              # approval stands unchecked. Inform, don't block — a repo that
+              # wants the guard enforced grants the line and requires this
+              # check in its branch rules.
               if [ "${verdict}" = "APPROVED" ] && [ -n "${REQUIRED_CHECK}" ]; then
                 ci_deadline=$(( $(date +%s) + 90 ))
                 ci_state="UNKNOWN"
@@ -458,7 +479,7 @@ jobs:
                         "repos/${{ github.repository }}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
                         2>/dev/null)
                   if [ -z "$runs_json" ]; then
-                    echo "::warning::Could not list workflow runs for ${HEAD_SHA}, so the CI cross-check is being skipped. The usual cause is the caller's permissions: block missing 'actions: read' — see callers/claude-pr-review.caller.yml."
+                    echo "::warning::Could not list workflow runs for ${HEAD_SHA}, so the CI cross-check is being skipped and this approval stands unchecked against '${REQUIRED_CHECK}'. The usual cause is the caller's permissions: block missing 'actions: read' — add the line from callers/claude-pr-review.caller.yml, or drop required_check if this repo does not want the cross-check."
                     break
                   fi
                   for run_id in $(printf '%s' "$runs_json" | jq -r '.workflow_runs[].id'); do

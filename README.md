@@ -151,18 +151,38 @@ logic — is deliberately unreachable from a caller.
 > installing this bot forces that trade — but leaving branch protection
 > unexamined makes it silently.
 
-Choose one, deliberately, per repo:
+**Default: do not make `review / claude-review` a required status check.**
+Two facts decide this (2026-09-29):
 
-- **Recommended default — human approval required, bot advisory.** Add a
-  `CODEOWNERS` file naming human owners, enable *Require review from Code
-  Owners*, and add `review / claude-review` as a required status check. The
-  bot still blocks bad PRs (its check fails on request-changes, on a
-  no-verdict review, and on a missing verdict) but its approval cannot merge
-  anything — a human's can.
-- **Opt-in — bot approval satisfies the gate.** Require 1 approval with no
-  code-owner rule. Velocity for repos where the team explicitly accepts that
-  a PR can merge with no human having read it. If you choose this, say so in
-  the repo's README.
+- A required check that never reports blocks every merge, and the bot has
+  failure modes that report nothing: a startup failure (a permissions
+  mismatch, a stale caller on a PR branch, a syntax error) creates no check,
+  no label and no escalation — the PR just says "Expected — waiting for
+  status" until someone finds the cause. On a repo whose team barely knows
+  the bot exists, that freezes development over a bot bug. Not acceptable in
+  any circumstance.
+- The bot still bites without the required check. Under a "require a pull
+  request before merging" rule, a **changes requested** review from
+  claude[bot] blocks the merge until a human dismisses it or the bot approves
+  the next push — observed on the pipeline repo, whose protection never
+  required the review check (each of its five dismissed change requests
+  needed that dismissal to merge). A red check for a no-verdict review or a
+  contradicted approval stays visible on the PR, and the label plus review
+  request page the maintainers. What the team does with that is the team's
+  call.
+
+A repo owner who wants the check to gate merges can add it to the branch
+rules later; nothing in the install assumes it. Then choose how approvals
+count, deliberately, per repo:
+
+- **Human approval required, bot advisory.** Add a `CODEOWNERS` file naming
+  human owners and enable *Require review from Code Owners*. The bot's
+  request-changes still blocks; its approval cannot merge anything — a
+  human's can.
+- **Bot approval satisfies the gate.** Require 1 approval with no code-owner
+  rule. Velocity for repos where the team explicitly accepts that a PR can
+  merge with no human having read it. If you choose this, say so in the
+  repo's README.
 
 ## Changing the bot
 
@@ -174,7 +194,12 @@ Three tiers, in order of how often they should happen:
    `claude-pr-review.yml`. The selftest calls the shared workflow **by local
    path**, so your PR is reviewed by the *changed* bot itself — you watch it
    work before it can merge, and the selftest is a required check here so a
-   change that breaks the bot cannot land. **Merging is releasing**:
+   change that breaks the bot cannot land — with one blind spot: a change
+   that fails at *startup* (a permission the job declares that the selftest
+   caller does not grant, an unknown input, a syntax error) reports no check
+   at all, and the PR shows "Expected — waiting for status". Treat that as a
+   failing selftest; an admin merging past it releases a bot no caller can
+   start (2026-09-21, see the changelog). **Merging is releasing**:
    `release.yml` moves the `v1` tag to the merge commit and every consumer
    picks it up on their next PR event. Rollback is re-pointing one tag
    (command in `release.yml`'s header). This tier is fine to hand to Claude
@@ -196,9 +221,10 @@ Three tiers, in order of how often they should happen:
 | Review step fails on its first turn; full-output stream shows an auth error | The repo isn't in the `CLAUDE_CODE_OAUTH_TOKEN` org secret's selected list (install step 2) — the secret evaluates to empty. |
 | `gh api` 403s in the verify or escalation steps | The caller's `permissions:` block was trimmed — restore it exactly as in `callers/claude-pr-review.caller.yml`. |
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
+| No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
 | Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
-| Review says it got `Resource not accessible by integration` reading `statusCheckRollup` | Your caller is missing `actions: read` from its `permissions:` block. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — the caller has to. Copy the `permissions:` block from `callers/claude-pr-review.caller.yml`. |
+| Run log warns `Could not list workflow runs … the CI cross-check is being skipped` | Your caller sets `required_check` but is missing `actions: read` from its `permissions:` block, so the verify step cannot read the check and the approval stands unchecked. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — copy the block from `callers/claude-pr-review.caller.yml`, or drop `required_check` if you do not want the cross-check. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
 
@@ -243,6 +269,21 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **v1, 2026-09-29** — the reusable job no longer declares its own
+  `permissions:`; it inherits the caller's. The 2026-09-21 release had made
+  `actions: read` a startup requirement, and a caller without it did not
+  degrade — it failed before any job ran, with no check, no label and no
+  escalation. That silenced this repo's own selftest (its caller had never
+  been given the line; #4 and #5 were merged past a check that never
+  reported), left the `sentfutures/.github` template shipping a caller that
+  could not start, and jammed PRs on Deco354/factory-farm-em whose branches
+  carried the older caller (#17). Now `actions: read` is needed only for the
+  CI cross-check of an approval (`required_check`): a caller without it
+  reviews normally and the run log warns that the approval stands unchecked.
+  The selftest caller and the org template carry the line. The
+  branch-protection recommendation changed to **advisory by default** — do
+  not require `review / claude-review`; a bot that cannot report must never
+  be able to freeze a team.
 - **v1, 2026-09-21** — the review can now read its `required_check`. It had
   always been told to, but was never granted `actions: read`, so
   `statusCheckRollup` returned "Resource not accessible by integration" and the
@@ -251,7 +292,8 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   this**: add `actions: read` to your caller's `permissions:` block. Permissions
   can only be reduced down a reusable-workflow chain, never elevated, so the
   shared workflow cannot supply it for you — a caller without the line will fail
-  to start. New installs get it from the template.
+  to start (true until 2026-09-29; see above). New installs get it from the
+  template.
 - **v1, 2026-08-20** — org setup completed (app + secret, all repositories);
   `review-bot` plugin added (`/install-review-bot`, `/disable-review-bot`);
   runbook restructured around it.
