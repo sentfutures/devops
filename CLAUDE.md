@@ -1,0 +1,133 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+Shared GitHub Actions for the sentfutures org: two **reusable workflows** under
+`.github/workflows/` (the Claude PR review bot and the `@claude` mention
+handler), the **caller templates** consuming repos copy (`callers/`), the
+**`pr-review-watch` skill** PR authors use to respond to the bot, and a
+**Claude Code plugin marketplace** (`.claude-plugin/`, `plugins/review-bot/`)
+whose `/install-review-bot` and `/disable-review-bot` skills operate all of it.
+
+The YAML under `.github/workflows/` *is* the product. Most PRs change it. The
+README is the full runbook and design rationale; read its "Changing the bot"
+and "Branch protection" sections before touching the review workflow.
+
+## There is no build, lint, or unit test — the selftest is the test
+
+Nothing runs locally. Changes are tested and released by the PR flow itself:
+
+- **Test:** `selftest-claude-pr-review.yml` is this repo's own caller and
+  invokes the shared workflow **by local path**, so a PR editing
+  `claude-pr-review.yml` is reviewed by the PR branch's *own* version of the
+  bot. `review / claude-review` is a required check on `main`. Watch it with
+  `gh pr checks <N>` and read the run with `gh run view <id> --log`.
+- **Expected quirk:** `anthropics/claude-code-action` self-skips on a PR that
+  edits a workflow file (it only runs the copy on the default branch). Such a
+  PR lands in the `NOT_REVIEWED` path: green check, `needs-human-review`
+  label, human reviewer requested. That path is itself under test.
+- **Blind spot — treat as a failing test:** a change that fails at *startup*
+  (a `permissions:` the selftest caller does not grant, an unknown input, a
+  YAML syntax error) creates **no check at all**; the PR shows
+  `review / claude-review — Expected, waiting for status`. Admin enforcement
+  is off on `main`, so an admin *can* merge past it. Never do.
+- **Release:** merging to `main` **is** the release. `release.yml` moves the
+  `v1` tag to the merge commit and every consumer picks it up on its next PR
+  event. Rollback is re-pointing the tag:
+  `git push origin +<old-sha>:refs/tags/v1`.
+- **Breaking changes** (renamed/removed input) must not ride `v1`: tag `v2`,
+  update `callers/` and the `sentfutures/.github` templates to `@v2`, add a
+  README changelog entry.
+
+To exercise the plugin skills locally:
+`/plugin marketplace add sentfutures/devops` then
+`/plugin install review-bot@sentfutures`.
+
+## How the review bot works (claude-pr-review.yml)
+
+One job, `claude-review`: a job-level gate, then steps that hand state to
+each other via `$GITHUB_OUTPUT`:
+
+1. **Gate + concurrency** (`if:` / `concurrency:`): skips fork PRs (no
+   secrets on `pull_request` from forks — the mention handler is the fallback)
+   and title/body-only `edited` events; cancels superseded runs so a burst of
+   pushes yields one verdict. Cancellation is why later steps guard on
+   `!cancelled()`, not `always()` alone.
+2. **Record review start time** — backdated 60s; the verify step only counts
+   a verdict submitted after this, so a stale review at the same SHA is
+   ignored.
+3. **Compose review prompt** — bash assembles the prompt from fixed quoted
+   heredocs plus the `workflow_call` inputs (`extra_instructions`,
+   `required_check`, `generated_paths*`). The reviewing rules and the
+   verdict rules are fixed text; only the repo-specific sections are inputs.
+4. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
+   narrow tool allowlist (Write, the inline-comment MCP tool, and
+   `gh pr review|diff|view`) and `Task` disallowed. The review **cannot read
+   CI** and the prompt tells it not to try.
+5. **Verify a review verdict was posted** — the action reports success even
+   with no verdict, so this step reads the reviews API itself: last *bodied*
+   claude review for this head SHA since the start time. `APPROVED` /
+   `CHANGES_REQUESTED` pass; `COMMENTED` (no binary verdict) fails the check;
+   `DISMISSED` is a notice; no verdict fails and dumps the agent's last turn.
+   For an approval with `required_check` set, the **contradiction guard**
+   polls the Actions API (needs the caller's `actions: read`; without it,
+   warn and skip) and fails the check if that job failed on this commit.
+6. **Request human review** — on `COMMENTED`, `NOT_REVIEWED`, or a
+   contradiction: apply `escalation_label` and request `escalate_to`
+   reviewers, minus the PR author (GitHub 422s) and anyone already pending.
+
+`claude-mention.yml` is the near-stock action with `contents: write` so
+`@claude` can push commits when asked; it is deliberately broader than the
+review bot.
+
+## Invariants when editing the review workflow
+
+Each of these exists because of a named production incident; the inline
+comments say which. The selftest may not catch the failure mode you
+reintroduce.
+
+- **The job declares no `permissions:` block.** It inherits the caller's. A
+  permission declared on the called job is a startup requirement on every
+  caller, and a startup failure produces no check, no label, no escalation.
+- **Inputs enter `run:` scripts only via `env:`.** Never `${{ inputs.x }}`
+  inside a script body. Prompt text uses quoted heredocs (`<<'BLOCK'`) and
+  placeholder substitution (`__PR__`, `__CHECK__`).
+- **Do not weaken the verify step's jq** (`(.body|length) > 0`, the
+  `jq -s 'add'` page merge, the `commit_id` and `submitted_at` filters) or
+  the tool allowlist without reading their comments first.
+- **A new input** needs a description, a safe empty default, and README
+  documentation in the same PR. Verdict rules, the allowlist, and the
+  verification logic are intentionally *not* inputs.
+- **`show_full_output: true` must already be on `main`** before a failure
+  you need to diagnose; PRs editing the workflow self-skip.
+
+## Files that move together
+
+- `callers/*.caller.yml` are **mirrored** as org workflow templates in
+  `sentfutures/.github/workflow-templates/` — update both.
+- `skills/pr-review-watch/SKILL.md` is the **canonical** copy; consuming
+  repos hold copies under `.claude/skills/`. Improve it here, and keep the
+  "In this repo (fill in at install…)" section as a fill-in template.
+- `/install-review-bot` fetches `callers/claude-pr-review.caller.yml`,
+  `callers/claude-mention.caller.yml`, and `skills/pr-review-watch/SKILL.md`
+  **by path** via `gh api repos/sentfutures/devops/contents/...`. Renaming or
+  moving them breaks every install until the skill is updated.
+- The README **Changelog** records every behavioral change to `v1` with its
+  date and the incident behind it. Add an entry with the change.
+- `animal-welfare-data-pipeline` (the origin repo) still runs its own copies
+  of these workflows until it migrates to a caller; fixes belong in both.
+- This repo must stay **public**: outside-org consumers resolve
+  `uses: sentfutures/devops/...` cross-owner.
+
+## Conventions
+
+- PR descriptions written by Claude open with a `> [!NOTE]` callout naming
+  Claude as the author and include a "How to test" section.
+- Never post comments, replies, or reviews on a PR from the user's account,
+  and never merge; draft text for the human to post. Review responses are
+  posted by humans, org-wide.
+- Prose in this repo is dense and dated: when documenting a decision, say
+  what was observed, when, and on which repo/PR, in the style of the existing
+  README and inline comments.
