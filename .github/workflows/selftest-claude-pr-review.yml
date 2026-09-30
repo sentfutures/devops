@@ -32,7 +32,6 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # same block as callers/claude-pr-review.caller.yml
     with:
       escalate_to: "Deco354"
       extra_instructions: |
