@@ -122,7 +122,9 @@ the GitHub web editor. Most customization belongs in `extra_instructions`:
         - Images added without alt text
 ```
 
-All inputs: `required_check`, `generated_paths` + `generated_paths_note`
+All inputs: `required_check`, `required_check_max_wait_minutes` (default 20:
+how long an approval waits for that check to finish before standing
+unchecked), `generated_paths` + `generated_paths_note`
 (skim committed generated data instead of analyzing it), `escalate_to`,
 `escalation_label` (default `needs-human-review`), `extra_instructions`,
 `model`. Each is documented at the top of `claude-pr-review.yml`. What is
@@ -223,7 +225,9 @@ Three tiers, in order of how often they should happen:
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
 | No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
-| Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
+| Reviews mention a check that never finishes, or the run log warns `No job named '…' appeared` | Your `required_check` value doesn't match the job's name as the Actions API reports it (the job id, or its `name:` if set) — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. The same warning appears when the CI workflow didn't run for that PR, e.g. a `paths:` filter excluded it. |
+| Run log warns `… had not finished … after N minutes` | Your suite outlasts the review by more than `required_check_max_wait_minutes` (default 20), so the approval stood unchecked. Raise the input in your caller's `with:` block. |
+| `review / claude-review` stays yellow long after the review was posted | Expected when `required_check` is set and your suite is slower than the review: the verify step holds the check open until the suite finishes, so the approval is checked against the suite's result instead of passing unchecked. |
 | Run log warns `Could not list workflow runs … the CI cross-check is being skipped` | Your caller sets `required_check` but is missing `actions: read` from its `permissions:` block, so the verify step cannot read the check and the approval stands unchecked. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — copy the block from `callers/claude-pr-review.caller.yml`, or drop `required_check` if you do not want the cross-check. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
@@ -269,6 +273,17 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **v1, 2026-09-29 (later)** — the CI cross-check now waits for
+  `required_check` to finish, capped by the new optional input
+  `required_check_max_wait_minutes` (default 20). It had given up after a
+  fixed 90s, which was sized for the pipeline repo, where suites finish before
+  the review. On enfiyeci/farm-welfare-eval, `tests` runs 7–12 min against a
+  2–5 min review, so every approval timed out into an unchecked pass: an
+  approval over a red suite stood green, with only a `::notice::` in the log.
+  Fast suites are unaffected (the first poll settles). A job that never
+  appears now stops the wait after 3 min instead of using the whole cap. Both
+  unchecked outcomes are now a `::warning::` plus a step-summary line, not a
+  notice. No caller change is needed.
 - **v1, 2026-09-29** — the reusable job no longer declares its own
   `permissions:`; it inherits the caller's. The 2026-09-21 release had made
   `actions: read` a startup requirement, and a caller without it did not

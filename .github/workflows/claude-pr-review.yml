@@ -21,6 +21,17 @@ on:
         type: string
         required: false
         default: ""
+      required_check_max_wait_minutes:
+        description: >-
+          How long the verify step waits for `required_check` to finish after
+          an approval, in whole minutes. The guard returns as soon as the check
+          completes, so a fast suite never waits; this only caps a slow one.
+          Past the cap the approval stands unchecked, with a warning. Raise it
+          if your suite routinely outlasts the review by more than this.
+          Ignored when required_check is empty.
+        type: number
+        required: false
+        default: 20
       generated_paths:
         description: >-
           Path pattern(s) for committed generated data the reviewer should
@@ -377,6 +388,7 @@ jobs:
           ESCALATION_LABEL: ${{ inputs.escalation_label }}
           # Read by the contradiction guard below, not by the review.
           REQUIRED_CHECK: ${{ inputs.required_check }}
+          CI_MAX_WAIT_MINUTES: ${{ inputs.required_check_max_wait_minutes }}
           SINCE: ${{ steps.review-start.outputs.ts }}
           ACTION_OUTCOME: ${{ steps.claude-review.outcome }}
           EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
@@ -449,9 +461,15 @@ jobs:
               # Contradiction guard: an approval must not stand over a red
               # suite. The review itself cannot read CI (see the prompt), so
               # this is checked here instead of asked of the model — after the
-              # review, when the result is almost certainly settled. Measured
-              # durations: reviews run 2-3 min, `test` 13-26s, `smoke` 1-2
-              # min, so the wait below is nearly always a single poll.
+              # review. It waits for the check to COMPLETE, capped by
+              # required_check_max_wait_minutes. It used to give up after a
+              # fixed 90s, sized for the pipeline repo (reviews 2-3 min, `test`
+              # 13-26s, `smoke` 1-2 min), where the first poll nearly always
+              # settles. On enfiyeci/farm-welfare-eval, `tests` runs 7-12 min
+              # against a 2-5 min review, so every approval timed out into an
+              # unchecked pass: an approval over a red suite stood green, with
+              # only a ::notice:: in the log. Fast suites still settle on the
+              # first poll; only slow ones hold the job open while they run.
               #
               # Deliberately NOT checked for CHANGES_REQUESTED: the bot has
               # already blocked the PR, so a red suite adds nothing.
@@ -465,7 +483,22 @@ jobs:
               # wants the guard enforced grants the line and requires this
               # check in its branch rules.
               if [ "${verdict}" = "APPROVED" ] && [ -n "${REQUIRED_CHECK}" ]; then
-                ci_deadline=$(( $(date +%s) + 90 ))
+                # A non-integer input would break the shell arithmetic below
+                # and fail the step on a healthy review; fall back instead.
+                case "${CI_MAX_WAIT_MINUTES}" in
+                  ''|*[!0-9]*)
+                    echo "::warning::required_check_max_wait_minutes='${CI_MAX_WAIT_MINUTES}' is not a whole number of minutes; using 20."
+                    CI_MAX_WAIT_MINUTES=20 ;;
+                esac
+                ci_start=$(date +%s)
+                ci_deadline=$(( ci_start + CI_MAX_WAIT_MINUTES * 60 ))
+                # The CI run is created at push time, alongside this review, so
+                # by the time the review has finished it has long since
+                # appeared. A job still missing after this grace window is not
+                # coming: a misspelled required_check, or a CI workflow filtered
+                # out for this PR. Stop there rather than burning the whole cap
+                # on every push.
+                ci_appear_deadline=$(( ci_start + 180 ))
                 ci_state="UNKNOWN"
                 while :; do
                   ci_row=""
@@ -480,6 +513,9 @@ jobs:
                         2>/dev/null)
                   if [ -z "$runs_json" ]; then
                     echo "::warning::Could not list workflow runs for ${HEAD_SHA}, so the CI cross-check is being skipped and this approval stands unchecked against '${REQUIRED_CHECK}'. The usual cause is the caller's permissions: block missing 'actions: read' — add the line from callers/claude-pr-review.caller.yml, or drop required_check if this repo does not want the cross-check."
+                    # Its own state, so the timeout warning below does not also
+                    # claim the suite ran past the cap.
+                    ci_state="UNREADABLE"
                     break
                   fi
                   for run_id in $(printf '%s' "$runs_json" | jq -r '.workflow_runs[].id'); do
@@ -500,8 +536,13 @@ jobs:
                     esac
                     break
                   fi
-                  [ "$(date +%s)" -ge "$ci_deadline" ] && break
-                  sleep 10
+                  now=$(date +%s)
+                  if [ -z "$ci_row" ] && [ "$now" -ge "$ci_appear_deadline" ]; then
+                    ci_state="NOT_FOUND"
+                    break
+                  fi
+                  [ "$now" -ge "$ci_deadline" ] && break
+                  sleep 30
                 done
 
                 if [ "${ci_state}" = "FAILED" ]; then
@@ -509,8 +550,21 @@ jobs:
                   echo "::error::Claude approved ${HEAD_SHA}, but the ${REQUIRED_CHECK} check failed on that commit. An approval cannot stand over a failing suite, so this check fails and a human is being asked to look. The review body is still worth reading; it simply could not see CI."
                   exit 1
                 fi
+                # Both outcomes below leave the approval UNCHECKED against CI.
+                # They are warnings, not failures (a bot that cannot see CI
+                # must not block a healthy PR), but they are warnings, not
+                # notices: a green check over an unchecked approval is exactly
+                # what nobody should mistake for a verified one. The step
+                # summary repeats it where a reader opening the run will see it.
+                if [ "${ci_state}" = "NOT_FOUND" ]; then
+                  msg="No job named '${REQUIRED_CHECK}' appeared for ${HEAD_SHA} within 3 minutes of the review finishing, so this approval stands unchecked against CI. Either required_check does not match the job's name as the Actions API reports it (the job id, or its name: if set), or the CI workflow did not run for this PR (a paths: filter, for example)."
+                  echo "::warning::${msg}"
+                  printf '### CI cross-check skipped\n\n%s\n' "${msg}" >> "$GITHUB_STEP_SUMMARY"
+                fi
                 if [ "${ci_state}" = "UNKNOWN" ]; then
-                  echo "::notice::Could not settle ${REQUIRED_CHECK} for ${HEAD_SHA} within 90s, so the approval stands unchecked. Not a failure — CI is slower than the review on this repo."
+                  msg="${REQUIRED_CHECK} had not finished on ${HEAD_SHA} after ${CI_MAX_WAIT_MINUTES} minutes, so this approval stands unchecked against CI. Read the ${REQUIRED_CHECK} check before merging, and raise required_check_max_wait_minutes in the caller if the suite routinely takes this long."
+                  echo "::warning::${msg}"
+                  printf '### CI cross-check timed out\n\n%s\n' "${msg}" >> "$GITHUB_STEP_SUMMARY"
                 fi
               fi
 
