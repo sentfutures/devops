@@ -101,11 +101,12 @@ person opens a PR.
 5. **Verify** — open a trivial test PR (one-line README change) and watch the
    run: the review posts inline comments and a verdict, "Verify a review
    verdict was posted" goes green, and the escalation step is skipped. If you
-   set a `required_check`, also read the review's summary: it should refer to
-   that check's result, and must not say it could not read `statusCheckRollup`
-   (see the troubleshooting table). The first three signals all appear even
-   when the review cannot see CI, so the green is not enough on its own. Then
-   comment `@claude say hello` on the PR to confirm the mention handler.
+   set a `required_check`, also read the review's summary: it must review the
+   code on its merits and must not caveat about tests or CI it could not see
+   (no "could not read `statusCheckRollup`", no "Resource not accessible by
+   integration") — that wording is a prompt regression in this repo, not a
+   setup problem on yours; see the troubleshooting table. Then comment
+   `@claude say hello` on the PR to confirm the mention handler.
 
 ### Customizing what the bot looks for
 
@@ -166,10 +167,20 @@ Two facts decide this (2026-09-29):
   claude[bot] blocks the merge until a human dismisses it or the bot approves
   the next push — observed on the pipeline repo, whose protection never
   required the review check (each of its five dismissed change requests
-  needed that dismissal to merge). A red check for a no-verdict review or a
-  contradicted approval stays visible on the PR, and the label plus review
-  request page the maintainers. What the team does with that is the team's
-  call.
+  needed that dismissal to merge). A red check for a no-verdict review stays
+  visible on the PR, and the label plus review request page the maintainers.
+  What the team does with that is the team's call.
+
+**Tests are enforced by branch protection, not by the bot.** The review never
+reads CI (its token cannot, and the prompt tells it not to try), and the
+post-approval cross-check of the verdict against `required_check` that lived
+in the verify step from 2026-09-21 to 2026-09-30 was removed: it gated
+nothing under the default above, it could only see a suite that finished
+before the review did (on website roughly one push in three finished after
+it, two of them 10-25 minutes late in a runner queue), and it spent runner
+minutes waiting on every push where it could not. If a red suite must block
+merges, *require the CI check* in the branch rules — that blocks the merge
+itself, costs nothing, and does not depend on the bot.
 
 A repo owner who wants the check to gate merges can add it to the branch
 rules later; nothing in the install assumes it. Then choose how approvals
@@ -223,8 +234,7 @@ Three tiers, in order of how often they should happen:
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
 | No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
-| Reviews mention a check that never finishes | Your `required_check` value doesn't match the check's real name — copy it exactly from a PR's checks list, or delete the line if the repo has no CI. |
-| Run log warns `Could not list workflow runs … the CI cross-check is being skipped` | Your caller sets `required_check` but is missing `actions: read` from its `permissions:` block, so the verify step cannot read the check and the approval stands unchecked. Permissions can only be reduced down a reusable-workflow chain, never elevated, so the shared workflow cannot grant itself this — copy the block from `callers/claude-pr-review.caller.yml`, or drop `required_check` if you do not want the cross-check. |
+| Review summary says it could not read `statusCheckRollup` / CI ("Resource not accessible by integration"), or caveats its verdict on not having seen the tests | The review is told it cannot read CI and must not try or caveat (the prompt block in `claude-pr-review.yml`). If that wording is back, the prompt on `v1` has regressed (it happened 2026-09-17 to 21): roll `v1` back per `release.yml`'s header and open an issue here. Nothing to fix in your caller — `required_check` is prompt context only. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
 
@@ -269,6 +279,29 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **v1, 2026-09-30** — the post-approval CI cross-check is removed, and
+  `required_check` is now prompt context only. The verify step had polled the
+  named job for a fixed 90s after an approval and failed `review /
+  claude-review` if it had finished red. Removed because: it gated nothing
+  (no consumer requires this check, and the section above says not to); it
+  could only see a suite that finished before the review did (website: one
+  push in three finished after it, two of them 10-25 minutes late in a
+  runner queue), so every fixed wait is tuned to one repo's timings and
+  loses to a queue anyway; on a suite slower than the review it spent 90s of
+  runner time per approved push to learn nothing; and it never fired.
+  oTullio's #7 found the gap on enfiyeci/farm-welfare-eval (a 7-12 min suite)
+  and proposed waiting to completion behind a new `type: number` input; not
+  taken — runner cost proportional to the suite, a typed input that fails
+  the workflow at startup if a caller quotes the value, and the wait length
+  being verification logic that is deliberately not caller-configurable.
+  Enforcement of tests is branch protection's: require the CI check. The
+  prompt still tells the review plainly that it cannot read CI and must not
+  caveat — that block is what ended the 2026-09-17..21 "Resource not
+  accessible by integration" caveats and is unchanged in substance. Callers
+  no longer need `actions: read` (the template and selftest drop it; an
+  existing caller that keeps it is harmless), and the action step no longer
+  requests `additional_permissions: actions: read`. The two 2026-09-21
+  entries below are superseded.
 - **v1, 2026-09-29** — the reusable job no longer declares its own
   `permissions:`; it inherits the caller's. The 2026-09-21 release had made
   `actions: read` a startup requirement, and a caller without it did not

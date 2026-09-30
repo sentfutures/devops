@@ -45,14 +45,10 @@ executable version of its install steps.
     cross-owner `uses:` and forces a transfer into the org.
 - Check `.github/workflows/` for existing files named `claude-pr-review.yml`
   or `claude-mention.yml` — if present, this repo may already be onboarded;
-  report instead of overwriting. When they are present, check one thing before
-  you report: does `claude-pr-review.yml`'s `permissions:` block include
-  `actions: read`? Repos onboarded before 2026-09-21 predate it. Without it the
-  CI cross-check of an approval (`required_check`) is skipped — the run log
-  warns and the approval stands unchecked — and on `v1` between 2026-09-21 and
-  2026-09-29 the workflow did not start at all (no check on the PR). Tell the
-  user; if the caller sets `required_check`, the fix is that one line, copied
-  from `callers/claude-pr-review.caller.yml`.
+  report instead of overwriting. An existing caller may carry `actions: read`
+  in its `permissions:` block (installs between 2026-09-21 and 2026-09-30 got
+  it for a CI cross-check that has since been removed); it is harmless and
+  needs no action.
 
 ## 2. Discover this repo's facts
 
@@ -61,6 +57,11 @@ executable version of its install steps.
   --limit 3`, then `gh pr checks <n>`) and identify the check that builds or
   tests the repo (e.g. `smoke`, `preview`). If the repo has no CI, the caller
   simply omits `required_check` — that is a supported mode, not a blocker.
+  The name is prompt context only: the review is told that check runs the
+  suite so it does not caveat about tests; nothing reads it. If the user
+  wants a red suite to block merges, that is *Require status checks to pass*
+  on this check in branch protection — say so, because the bot does not
+  enforce it.
 - Who to page: **ask the user** which GitHub logins `escalate_to` should name
   (suggest the repo's admins from
   `gh api repos/<owner>/<repo>/collaborators --jq '.[] | select(.permissions.admin) | .login'`).
@@ -122,8 +123,11 @@ means **they** comment `@claude say hello` — comments are always posted by
 the human, never by you from their account.
 
 If you set a `required_check`, add one more thing to check on that test PR:
-the review's summary should **refer to the check's result**, and must not say
-it could not read `statusCheckRollup`. Inline comments, a verdict and a green
-check all appear even when the review cannot see CI, which is how that went
-unnoticed for 114 PRs on the origin repo — so it is worth naming as its own
-expectation rather than trusting the green.
+the review's summary must review the code on its merits and **must not caveat
+about tests or CI it could not see** — no "could not read
+`statusCheckRollup`", no "Resource not accessible by integration". The review
+is told it cannot read CI and not to try; that wording coming back is a prompt
+regression in sentfutures/devops (it happened 2026-09-17 to 21), not a setup
+problem here — report it there. Inline comments, a verdict and a green check
+all appear either way, so it is worth naming as its own expectation rather
+than trusting the green.
