@@ -488,7 +488,9 @@ jobs:
       # 2026-10-08: tying the verdict to coverage would block too many PRs):
       # this never fails the check or touches the verdict. It decides whether
       # the follow-up pass below runs, and "Report review coverage" re-counts
-      # over both passes.
+      # over both passes. continue-on-error keeps that true if this script
+      # itself breaks (an execution file jq cannot parse, say): the follow-up
+      # and the report then skip, and the verdict is checked as usual.
       - name: Measure which diffs the review read
         id: coverage
         if: >-
@@ -496,6 +498,7 @@ jobs:
           steps.claude-review.outcome == 'success' &&
           steps.claude-review.outputs.execution_file != '' &&
           steps.diffs.outputs.count != '0'
+        continue-on-error: true
         env:
           STATE: ${{ steps.diffs.outputs.state }}
           EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
@@ -590,6 +593,7 @@ jobs:
         id: claude-followup
         if: >-
           always() && !cancelled() &&
+          steps.coverage.outcome == 'success' &&
           steps.coverage.outputs.unread != '' &&
           steps.coverage.outputs.unread != '0' &&
           steps.claude-review.outputs.session_id != ''
