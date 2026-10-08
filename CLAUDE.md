@@ -58,25 +58,39 @@ each other via `$GITHUB_OUTPUT`:
 2. **Record review start time** — backdated 60s; the verify step only counts
    a verdict submitted after this, so a stale review at the same SHA is
    ignored.
-3. **Compose review prompt** — bash assembles the prompt from fixed quoted
-   heredocs plus the `workflow_call` inputs (`extra_instructions`,
-   `required_check`, `generated_paths*`). The reviewing rules and the
-   verdict rules are fixed text; only the repo-specific sections are inputs.
-4. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
+3. **Write per-file diffs** — `git diff` of the `pull_request` merge commit
+   against its first parent (checkout is `fetch-depth: 2`), one file per
+   changed path under `.claude-review/diffs/`; `generated_paths` (git globs)
+   get no diff. The review must not depend on `gh pr diff`: above Claude
+   Code's tool-output limit its output arrives as a 2 KB preview, and it
+   takes no path argument (#11).
+4. **Compose review prompt** — bash assembles the prompt from fixed quoted
+   heredocs, the list of diff files, and the `workflow_call` inputs
+   (`extra_instructions`, `required_check`, `generated_paths*`). The
+   reviewing rules and the verdict rules are fixed text; only the
+   repo-specific sections are inputs.
+5. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
    narrow tool allowlist (Write, the inline-comment MCP tool, and
    `gh pr review|diff|view`) and `Task` disallowed. The review **cannot read
    CI** and the prompt tells it not to try.
-5. **Verify a review verdict was posted** — the action reports success even
+6. **Measure which diffs the review read** — from the execution file: a diff
+   counts as read only when successful Read calls covered all its lines.
+7. **Review the diffs the first pass did not read** — only when some are
+   unread: a second action run resumes the first session
+   (`--resume <session_id>`), reads the rest, and files one more verdict for
+   the whole PR. `continue-on-error`, so it can never sink the first verdict.
+8. **Report review coverage** — job summary over both passes; anything still
+   unread gets a `::warning::` and a PR comment with a ready-to-paste
+   `@claude` prompt (posted with `GITHUB_TOKEN`, so it triggers nothing).
+9. **Verify a review verdict was posted** — the action reports success even
    with no verdict, so this step reads the reviews API itself: last *bodied*
-   claude review for this head SHA since the start time. `APPROVED` /
-   `CHANGES_REQUESTED` pass; `COMMENTED` (no binary verdict) fails the check;
-   `DISMISSED` is a notice; no verdict fails and dumps the agent's last turn.
-   For an approval with `required_check` set, the **contradiction guard**
-   polls the Actions API (needs the caller's `actions: read`; without it,
-   warn and skip) and fails the check if that job failed on this commit.
-6. **Request human review** — on `COMMENTED`, `NOT_REVIEWED`, or a
-   contradiction: apply `escalation_label` and request `escalate_to`
-   reviewers, minus the PR author (GitHub 422s) and anyone already pending.
+   claude review for this head SHA since the start time — the follow-up's,
+   when one ran. `APPROVED` / `CHANGES_REQUESTED` pass; `COMMENTED` (no
+   binary verdict) fails the check; `DISMISSED` is a notice; no verdict fails
+   and dumps the agent's last turn.
+10. **Request human review** — on `COMMENTED` or `NOT_REVIEWED`: apply
+    `escalation_label` and request `escalate_to` reviewers, minus the PR
+    author (GitHub 422s) and anyone already pending.
 
 `claude-mention.yml` is the near-stock action with `contents: write` so
 `@claude` can push commits when asked; it is deliberately broader than the
@@ -100,6 +114,11 @@ reintroduce.
 - **A new input** needs a description, a safe empty default, and README
   documentation in the same PR. Verdict rules, the allowlist, and the
   verification logic are intentionally *not* inputs.
+- **Coverage is report-only.** The measurement, the follow-up pass and the
+  warning comment never fail the check or gate the verdict — decided
+  2026-10-08 (#11): tying the verdict to coverage would block too many PRs.
+- **The follow-up step repeats the first pass's `claude_args` allowlist.**
+  Change both together.
 - **`show_full_output: true` must already be on `main`** before a failure
   you need to diagnose; PRs editing the workflow self-skip.
 
@@ -116,8 +135,9 @@ reintroduce.
   moving them breaks every install until the skill is updated.
 - The README **Changelog** records every behavioral change to `v1` with its
   date and the incident behind it. Add an entry with the change.
-- `animal-welfare-data-pipeline` (the origin repo) still runs its own copies
-  of these workflows until it migrates to a caller; fixes belong in both.
+- `animal-welfare-data-pipeline` (the origin repo) calls both shared
+  workflows at `@v1` since 2026-09-21 (its #169); it has no copies left to
+  keep in sync.
 - This repo must stay **public**: outside-org consumers resolve
   `uses: sentfutures/devops/...` cross-owner.
 
