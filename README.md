@@ -30,7 +30,8 @@ On every pull request, claude[bot]:
    back (at most twice) until it has read every diff, and a follow-up pass
    reads any it still skipped. Anything left unread after that is named in
    a PR comment with a ready-to-paste `@claude` prompt. Coverage is
-   report-only — it never fails the check or changes the verdict;
+   report-only — it never fails the check, and a verdict is never
+   withheld or downgraded for unread files;
 4. **escalates to humans** when it can't supply a verdict: the
    `needs-human-review` label plus a review request to the maintainers named
    in your caller.
