@@ -63,32 +63,39 @@ each other via `$GITHUB_OUTPUT`:
    changed path under `.claude-review/diffs/`; `generated_paths` (git globs)
    get no diff. The review must not depend on `gh pr diff`: above Claude
    Code's tool-output limit its output arrives as a 2 KB preview, and it
-   takes no path argument (#11).
+   takes no path argument (#11). Also writes `coverage.jq`, the one
+   definition of "read": successful Read calls covered all of a diff's
+   lines.
 4. **Compose review prompt** — bash assembles the prompt from fixed quoted
    heredocs, the list of diff files, and the `workflow_call` inputs
    (`extra_instructions`, `required_check`, `generated_paths*`). The
    reviewing rules and the verdict rules are fixed text; only the
    repo-specific sections are inputs.
-5. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
+5. **Hold the verdict until every diff is read** — writes a Claude Code
+   PreToolUse hook, passed to the action as its `settings` input. While
+   any diff is unread, the hook refuses `gh pr review` and names the
+   unread diffs. It refuses at most twice, and lets the verdict through
+   whenever it cannot tell. Prompt wording alone got 7–12 of 24 diffs read
+   on factory-farm-em#40.
+6. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
    narrow tool allowlist (Write, the inline-comment MCP tool, and
    `gh pr review|diff|view`) and `Task` disallowed. The review **cannot read
    CI** and the prompt tells it not to try.
-6. **Measure which diffs the review read** — from the execution file: a diff
-   counts as read only when successful Read calls covered all its lines.
-7. **Review the diffs the first pass did not read** — only when some are
+7. **Measure which diffs the review read** — from the execution file.
+8. **Review the diffs the first pass did not read** — only when some are
    unread: a second action run resumes the first session
    (`--resume <session_id>`), reads the rest, and files one more verdict for
    the whole PR. `continue-on-error`, so it can never sink the first verdict.
-8. **Report review coverage** — job summary over both passes; anything still
+9. **Report review coverage** — job summary over both passes; anything still
    unread gets a `::warning::` and a PR comment with a ready-to-paste
    `@claude` prompt (posted with `GITHUB_TOKEN`, so it triggers nothing).
-9. **Verify a review verdict was posted** — the action reports success even
+10. **Verify a review verdict was posted** — the action reports success even
    with no verdict, so this step reads the reviews API itself: last *bodied*
    claude review for this head SHA since the start time — the follow-up's,
    when one ran. `APPROVED` / `CHANGES_REQUESTED` pass; `COMMENTED` (no
    binary verdict) fails the check; `DISMISSED` is a notice; no verdict fails
    and dumps the agent's last turn.
-10. **Request human review** — on `COMMENTED` or `NOT_REVIEWED`: apply
+11. **Request human review** — on `COMMENTED` or `NOT_REVIEWED`: apply
     `escalation_label` and request `escalate_to` reviewers, minus the PR
     author (GitHub 422s) and anyone already pending.
 
@@ -117,6 +124,9 @@ reintroduce.
 - **Coverage is report-only.** The measurement, the follow-up pass and the
   warning comment never fail the check or gate the verdict — decided
   2026-10-08 (#11): tying the verdict to coverage would block too many PRs.
+  The verdict gate's hook decides only *when* the verdict goes out. It
+  must keep its cap on refusals and keep letting the verdict through
+  whenever it errors.
 - **The follow-up step repeats the first pass's `claude_args` allowlist.**
   Change both together.
 - **`show_full_output: true` must already be on `main`** before a failure

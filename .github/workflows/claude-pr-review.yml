@@ -234,6 +234,29 @@ jobs:
             printf -- "- \`%s\` (%s): \`%s\`\n" "$path" "$label" "$diff" >>"$state/files.md"
           done <"$state/numstat"
 
+          # What "read" means for these diffs, used by the verdict gate during
+          # the review and by the coverage steps after it.
+          cat >"$state/coverage.jq" <<'JQ'
+          # Input (-s): one or more arrays of SDK messages, i.e. a pass's
+          # execution file or the session transcript as an array.
+          # $m: the manifest, one {path, diff, lines} per diff.
+          # Output: the manifest with `read` set on every entry.
+          def covers($n):  # input: [[first, last], ...] line ranges read
+            ($n == 0) or
+            (reduce sort[] as $r (0; if $r[0] <= . + 1 then ([., $r[1]] | max) else . end) >= $n);
+          (add // []) as $msgs
+          | [ $msgs[] | select(.type == "user") | .message.content[]?
+              | select(.type == "tool_result" and (.is_error // false)) | .tool_use_id ] as $failed
+          | [ $msgs[] | select(.type == "assistant") | .message.content[]?
+              | select(.type == "tool_use" and .name == "Read")
+              | select(.id as $id | any($failed[]; . == $id) | not)
+              | (.input.file_path // "") as $f
+              | ([(.input.offset // 1 | tonumber), 1] | max) as $first
+              | { file: (if ($f | startswith("/")) then $f else "\(env.GITHUB_WORKSPACE)/\($f)" end),
+                  range: [$first, $first + (.input.limit // 2000 | tonumber) - 1] } ] as $reads
+          | $m | map(. as $e | . + { read: ([ $reads[] | select(.file == $e.diff) | .range ] | covers($e.lines)) })
+          JQ
+
           echo "${n} diff(s) to review:"; cat "$state/files.md"
           if [ -s "$state/generated.md" ]; then echo "Generated, not reviewed:"; cat "$state/generated.md"; fi
           if [ -s "$state/binary.md" ]; then echo "Binary, no text diff:"; cat "$state/binary.md"; fi
@@ -445,6 +468,79 @@ jobs:
             echo "${delim}"
           } >>"$GITHUB_OUTPUT"
 
+      # The prompt alone does not get every diff read. On
+      # Deco354/factory-farm-em#40 (2026-10-08) the first pass read 12, 12
+      # and 7 of 24 diffs under three prompt wordings. The third told it to
+      # "Start by reading EVERY diff", and it still wrote "I did not read
+      # every diff" and approved. Yet each follow-up pass, handed the list
+      # of what was unread, read all of it. So this hands it that list
+      # *before* the verdict.
+      #
+      # A PreToolUse hook refuses `gh pr review` while any listed diff is
+      # unread, by the same rule as "Measure which diffs the review read",
+      # and names what is left. The action merges its `settings` input into
+      # ~/.claude/settings.json, so the hook stays installed for the
+      # follow-up pass too.
+      #
+      # The hook refuses at most twice per job, then lets the verdict
+      # through, and it lets it through whenever it cannot tell (no
+      # transcript, a jq error). It decides when the verdict is posted,
+      # never what it says, and it never fails the check: coverage stays
+      # report-only (#11). continue-on-error because without the hook the
+      # review runs as it did before.
+      - name: Hold the verdict until every diff is read
+        id: gate
+        if: steps.diffs.outputs.count != '0'
+        continue-on-error: true
+        env:
+          STATE: ${{ steps.diffs.outputs.state }}
+        run: |
+          set -euo pipefail
+          cat >"$STATE/verdict-gate.sh" <<'GATE'
+          #!/bin/bash
+          # PreToolUse hook on the review agent's Bash calls. Exit 2 refuses
+          # the call and shows stderr to the agent; any other exit lets it run.
+          set -o pipefail
+          state=$(dirname "$0")
+          input=$(cat) || exit 0
+          cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 0
+          [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$) ]] || exit 0
+          held=$(cat "$state/gate-held" 2>/dev/null || echo 0)
+          [ "$held" -lt 2 ] || exit 0
+          transcript=$(jq -r '.transcript_path // ""' <<<"$input") || exit 0
+          [ -f "$transcript" ] || exit 0
+          GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(jq -r '.cwd // ""' <<<"$input")}"
+          export GITHUB_WORKSPACE
+          # The transcript is JSONL: one message per line. Skip a line that
+          # does not parse rather than give up on the whole count.
+          list=$(jq -R 'fromjson? // empty' "$transcript" | jq -s . |
+            jq -s --slurpfile m "$state/manifest.jsonl" -f "$state/coverage.jq" |
+            jq -r '.[] | select(.read | not) | "- `\(.path)`: `\(.diff)` (\(.lines) lines)"') || exit 0
+          [ -n "$list" ] || exit 0
+          echo $((held + 1)) >"$state/gate-held"
+          {
+            echo "Not yet: your review has not read these diffs to the end, and its verdict has to cover every listed diff:"
+            echo
+            printf '%s\n' "$list"
+            echo
+            cat <<'MSG'
+          This is not an error, and nothing is wrong with the command. Read
+          each of these diffs now, to its last line, with the Read tool: all
+          of them in one turn if you can, using `offset` and `limit` past
+          2,000 lines. Leave an inline comment for each significant issue you
+          find in them. Update review-body.md so it covers them, then run
+          your `gh pr review` command again.
+          MSG
+          } >&2
+          exit 2
+          GATE
+          rm -f "$STATE/gate-held"
+          jq -n --arg cmd "bash \"${STATE}/verdict-gate.sh\"" \
+            '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $cmd, timeout: 60}]}]}}' \
+            >"$STATE/settings.json"
+          jq -e . "$STATE/settings.json" >/dev/null
+          echo "settings=${STATE}/settings.json" >>"$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -463,6 +559,9 @@ jobs:
           # bot names instead of '*' if you want to restrict which bots trigger it.
           allowed_bots: "*"
           prompt: ${{ steps.prompt.outputs.prompt }}
+          # The verdict gate's hook (see "Hold the verdict until every diff is
+          # read"). Empty when that step was skipped or failed: no hook.
+          settings: ${{ steps.gate.outputs.settings }}
           # The action denies comment-posting tools by default; grant the inline
           # comment tool plus the gh subcommands the review needs, or it reviews
           # but cannot post its findings. `Write` lets the review compose its
@@ -525,32 +624,13 @@ jobs:
           # keep this pass's copy for the count over both passes.
           cp "$EXEC_FILE" "$STATE/exec-1.json"
 
-          cat >"$STATE/coverage.jq" <<'JQ'
-          # Input (-s): one execution file per review pass, each an array of
-          # SDK messages. $m: the manifest, one {path, diff, lines} per diff.
-          # Output: the manifest with `read` set on every entry.
-          def covers($n):  # input: [[first, last], ...] line ranges read
-            ($n == 0) or
-            (reduce sort[] as $r (0; if $r[0] <= . + 1 then ([., $r[1]] | max) else . end) >= $n);
-          (add // []) as $msgs
-          | [ $msgs[] | select(.type == "user") | .message.content[]?
-              | select(.type == "tool_result" and (.is_error // false)) | .tool_use_id ] as $failed
-          | [ $msgs[] | select(.type == "assistant") | .message.content[]?
-              | select(.type == "tool_use" and .name == "Read")
-              | select(.id as $id | any($failed[]; . == $id) | not)
-              | (.input.file_path // "") as $f
-              | ([(.input.offset // 1 | tonumber), 1] | max) as $first
-              | { file: (if ($f | startswith("/")) then $f else "\(env.GITHUB_WORKSPACE)/\($f)" end),
-                  range: [$first, $first + (.input.limit // 2000 | tonumber) - 1] } ] as $reads
-          | $m | map(. as $e | . + { read: ([ $reads[] | select(.file == $e.diff) | .range ] | covers($e.lines)) })
-          JQ
-
           jq -s --slurpfile m "$STATE/manifest.jsonl" -f "$STATE/coverage.jq" \
             "$STATE/exec-1.json" >"$STATE/coverage.json"
           total=$(jq length "$STATE/coverage.json")
           unread=$(jq '[.[] | select(.read | not)] | length' "$STATE/coverage.json")
           echo "unread=${unread}" >>"$GITHUB_OUTPUT"
-          echo "The review read $((total - unread)) of ${total} diffs to the end."
+          held=$(cat "$STATE/gate-held" 2>/dev/null || echo 0)
+          echo "The review read $((total - unread)) of ${total} diffs to the end. The verdict gate held its verdict back ${held} time(s)."
           if [ "$unread" -eq 0 ]; then
             exit 0
           fi
@@ -659,10 +739,14 @@ jobs:
             failure) passes=" (the follow-up pass failed)" ;;
             *)       passes="" ;;
           esac
+          held=$(cat "$STATE/gate-held" 2>/dev/null || echo 0)
           {
             echo "### Review coverage"
             echo
             echo "Read **$((total - unread)) of ${total}** non-generated diffs to the end${passes}."
+            if [ "$held" -gt 0 ]; then
+              echo "The verdict gate held the verdict back ${held} time(s) for diffs not yet read."
+            fi
             if [ "$unread" -gt 0 ]; then
               echo
               echo "Not read:"

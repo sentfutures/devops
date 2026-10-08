@@ -26,10 +26,11 @@ On every pull request, claude[bot]:
 3. is **checked up on**: a verification step confirms a verdict for the
    current commit actually landed, and fails the `review / claude-review`
    check if the bot looked but wouldn't commit to a verdict. A coverage
-   check counts which diffs it actually read: a follow-up pass reads any it
-   skipped, and anything still unread is named in a PR comment with a
-   ready-to-paste `@claude` prompt. Coverage is report-only — it never fails
-   the check or changes the verdict;
+   check counts which diffs it actually read. The bot's verdict is held
+   back (at most twice) until it has read every diff, and a follow-up pass
+   reads any it still skipped. Anything left unread after that is named in
+   a PR comment with a ready-to-paste `@claude` prompt. Coverage is
+   report-only — it never fails the check or changes the verdict;
 4. **escalates to humans** when it can't supply a verdict: the
    `needs-human-review` label plus a review request to the maintainers named
    in your caller.
@@ -302,7 +303,12 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   (`git diff` of the merge commit; checkout is `fetch-depth: 2`) and lists
   them in the prompt; `generated_paths` files get no diff and are listed by
   name and size only, so `generated_paths` is now whitespace-separated git
-  globs (both live values, `outputs/**` and `uv.lock`, already are). A step
+  globs (both live values, `outputs/**` and `uv.lock`, already are). The
+  list alone was not enough: in a replay of #29 (factory-farm-em#40) the
+  first pass read 12, 12 and 7 of 24 diffs under three prompt wordings,
+  skipping every test and doc. So a Claude Code hook, passed through the
+  action's `settings` input, refuses the review's `gh pr review` while any
+  diff is unread and names what is left; it refuses at most twice. A step
   counts the lines each diff's Read calls covered; if any diff is unread, a
   second action run resumes the review's session to read the rest and file
   one more verdict for the whole PR, which the verify step checks as before.
