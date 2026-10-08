@@ -271,6 +271,14 @@ jobs:
           # per-file diffs" for why. The list of diff files is the review's
           # scope, and "every diff, to its last line" is measured afterwards
           # (see "Measure which diffs the review read").
+          #
+          # Read-all-first, and naming tests/docs/configs as in scope, are
+          # from Deco354/factory-farm-em#40 (2026-10-08, 2 runs). There, with
+          # "Read EVERY diff" but "focus on … the changed code only" and
+          # "you do not need [the tests]" further down, Sonnet 5.5 read the
+          # source diffs a few at a time, most important first. It skipped
+          # all 6 test files and both docs, 12 of 24 diffs in each run, then
+          # approved and said it had read them.
           cat >>"$P" <<'BLOCK'
           Review this pull request. The PR branch is already checked out in
           the current working directory, and the diff of each changed file
@@ -285,12 +293,16 @@ jobs:
 
           if [ "$DIFF_COUNT" -gt 0 ]; then
             read -r -d '' T <<'BLOCK' || true
-          Changed files (__COUNT__). Read EVERY diff below, each one to its
-          last line, before you submit a verdict — not a sample, and not only
-          the files that look riskiest. Read returns 2,000 lines at a time by
-          default: for a longer diff, call it again with `offset` and `limit`
-          until you reach the end. Then read the surrounding source wherever
-          a hunk needs context.
+          Changed files (__COUNT__). Start by reading EVERY diff below, each
+          one to its last line — not a sample, and not only the files that
+          look riskiest. Issue those Read calls together, in one turn if you
+          can. Tests, docs, and config files are part of the review, not
+          just source code: a test can assert the wrong behaviour, a config
+          can set a wrong value, and a doc can promise something the code
+          does not do. Read returns 2,000 lines at a time by default: for a
+          longer diff, call it again with `offset` and `limit` until you
+          reach the end. Only then read the surrounding source wherever a
+          hunk needs context.
           BLOCK
             T="${T//__COUNT__/${DIFF_COUNT}}"
             printf '\n%s\n\n' "$T" >>"$P"
@@ -321,7 +333,8 @@ jobs:
 
           cat >>"$P" <<'BLOCK'
 
-          Focus on high-signal problems in the changed code only:
+          Report only high-signal problems in the changed files (this bar is
+          for what you report, not for what you read):
           - Bugs, logic errors, and unhandled edge cases
           - Security issues
           - Clear violations of guidelines in any relevant CLAUDE.md (root or a
@@ -356,10 +369,12 @@ jobs:
             read -r -d '' T <<'BLOCK' || true
           You cannot run tests and you cannot read CI results — do not try,
           the calls are denied and will only waste turns. You do not need
-          them: this repository's `__CHECK__` check runs the suite against
-          this commit, and its result is enforced by the repository's branch
-          rules independently of your review. Review the code on its merits
-          and do not caveat your review over not having seen the tests.
+          the results: this repository's `__CHECK__` check runs the suite
+          against this commit, and its result is enforced by the repository's
+          branch rules independently of your review. Review the code on its
+          merits and do not caveat your review over not having seen test
+          results. That is about results only: the test files in the diff
+          are part of your review, like every other diff.
           BLOCK
             T="${T//__CHECK__/${REQUIRED_CHECK}}"
           else
