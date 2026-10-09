@@ -8,9 +8,6 @@ name: Claude mention handler
 #
 # NOTE the permissions: this handler gets contents: write (it can push
 # commits when asked to) — a deliberately broader grant than the review bot's.
-#
-# This file is mirrored as an org workflow template in sentfutures/.github —
-# keep the two in sync when editing.
 on:
   issue_comment:
     types: [created]

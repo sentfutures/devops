@@ -5,9 +5,6 @@ name: Claude PR review bot
 # (.github/workflows/claude-pr-review.yml); this file only carries the
 # triggers and this repo's own settings. Setup steps (app install, secret
 # access, label, branch protection): see the sentfutures/devops README.
-#
-# This file is mirrored as an org workflow template in sentfutures/.github —
-# keep the two in sync when editing.
 on:
   pull_request:
     # `edited` re-reviews when a stacked PR retargets its base branch (GitHub

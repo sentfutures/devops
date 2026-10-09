@@ -38,8 +38,7 @@ Nothing runs locally. Changes are tested and released by the PR flow itself:
   event. Rollback is re-pointing the tag:
   `git push origin +<old-sha>:refs/tags/v1`.
 - **Breaking changes** (renamed/removed input) must not ride `v1`: tag `v2`,
-  update `callers/` and the `sentfutures/.github` templates to `@v2`, add a
-  README changelog entry.
+  update `callers/` to `@v2`, add a README changelog entry.
 
 To exercise the plugin skills locally:
 `/plugin marketplace add sentfutures/devops` then
@@ -142,8 +141,11 @@ reintroduce.
 
 ## Files that move together
 
-- `callers/*.caller.yml` are **mirrored** as org workflow templates in
-  `sentfutures/.github/workflow-templates/` — update both.
+- `callers/*.caller.yml` are the only copy of the callers. The org workflow
+  templates that mirrored them in `sentfutures/.github` were retired on
+  2026-10-09 (sentfutures/.github#5): no repo had been installed from them,
+  repos under personal accounts can't see org templates, and the copy
+  drifted. Don't re-add them without a sync check.
 - `skills/pr-review-watch/SKILL.md` is the **canonical** copy; consuming
   repos hold copies under `.claude/skills/`. Improve it here, and keep the
   "In this repo (fill in at install…)" section as a fill-in template.
