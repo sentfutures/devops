@@ -24,11 +24,13 @@ on:
       generated_paths:
         description: >-
           Whitespace-separated git glob pattern(s) for committed generated
-          data, e.g. "outputs/**" or "uv.lock". A pattern with no slash
-          matches at any depth, as in .gitignore. Matching files are left out
-          of the review: no diff is written for them, and the prompt lists
-          them by name and size only. Empty: every changed text file is
-          reviewed.
+          data, e.g. "outputs/**". A pattern with no slash matches at any
+          depth, as in .gitignore. Matching files are left out of the
+          review: no diff is written for them, and the prompt lists them by
+          name and size only. Meant for bulk machine output nobody reads line
+          by line, not lockfiles: a lockfile's diff is usually small, and it
+          is the only place indirect dependency and source changes show.
+          Empty: every changed text file is reviewed.
         type: string
         required: false
         default: ""

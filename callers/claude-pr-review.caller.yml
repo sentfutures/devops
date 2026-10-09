@@ -43,7 +43,9 @@ jobs:
       # extra_instructions: |
       #   Also flag:
       #   - Broken internal links in changed HTML
-      # Optional — skim committed generated data instead of analyzing it:
+      # Optional — leave bulk generated data (e.g. committed run outputs) out
+      # of the review entirely; it is listed by name and size only. Not for
+      # lockfiles: their diffs are small and show dependency changes.
       # generated_paths: "outputs/**"
       # generated_paths_note: "See CLAUDE.md for why this data is committed."
     secrets:

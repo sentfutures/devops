@@ -132,8 +132,9 @@ the GitHub web editor. Most customization belongs in `extra_instructions`:
 ```
 
 All inputs: `required_check`, `generated_paths` + `generated_paths_note`
-(leave committed generated data out of the review — whitespace-separated git
-globs such as `outputs/**` or `uv.lock`), `escalate_to`,
+(leave bulk committed generated data out of the review — whitespace-separated
+git globs such as `outputs/**`; not for lockfiles, whose small diffs are
+where dependency changes show), `escalate_to`,
 `escalation_label` (default `needs-human-review`), `extra_instructions`,
 `model`. Each is documented at the top of `claude-pr-review.yml`. What is
 *not* an input — the verdict rules, the tool allowlist, the verification
@@ -304,7 +305,11 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   (`git diff` of the merge commit; checkout is `fetch-depth: 2`) and lists
   them in the prompt; `generated_paths` files get no diff and are listed by
   name and size only, so `generated_paths` is now whitespace-separated git
-  globs (both live values, `outputs/**` and `uv.lock`, already are). The
+  globs (both values in use on 2026-10-09, `outputs/**` and `uv.lock`,
+  already are). Withheld now means unseen, not skimmed, so lockfiles are no
+  longer suggested for it: factory-farm-em's `uv.lock` changes ran 2–56
+  lines, and it is the only place indirect dependency and source changes
+  show; Deco354/factory-farm-em#44 stops withholding it. The
   list alone was not enough: in a replay of #29 (factory-farm-em#40) the
   first pass read 12, 12 and 7 of 24 diffs under three prompt wordings,
   skipping every test and doc. So a Claude Code hook, passed through the
