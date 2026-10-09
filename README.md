@@ -289,7 +289,7 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
-- **v1, 2026-10-08** — the review reads every non-generated diff, and is
+- **v1, 2026-10-09** — the review reads every non-generated diff, and is
   checked for it (#11). On Deco354/factory-farm-em#29 (25 files, ~150 KB of
   diff) all seven approvals between 2026-10-06 and 10-08 said they had read
   only part of the PR, and none had read `analysis/summary.py`, which
