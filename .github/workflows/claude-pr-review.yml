@@ -24,8 +24,9 @@ on:
       generated_paths:
         description: >-
           Whitespace-separated git glob pattern(s) for committed generated
-          data, e.g. "outputs/**". A pattern with no slash matches at any
-          depth, as in .gitignore. Matching files are left out of the
+          data, e.g. "outputs/**"; spaces or newlines, so a YAML `|` block
+          with one pattern per line works. A pattern with no slash matches at
+          any depth, as in .gitignore. Matching files are left out of the
           review: no diff is written for them, and the prompt lists them by
           name and size only. Meant for bulk machine output nobody reads line
           by line, not lockfiles: a lockfile's diff is usually small, and it
@@ -184,8 +185,12 @@ jobs:
           # generated_paths -> git glob pathspecs. `read -a`, not an unquoted
           # $GENERATED_PATHS, so `outputs/**` is never expanded against the
           # checkout. A pattern with no slash matches at any depth, as in
-          # .gitignore: `uv.lock` also matches `pkg/uv.lock`.
-          read -r -a pats <<<"${GENERATED_PATHS}"
+          # .gitignore: `uv.lock` also matches `pkg/uv.lock`. `-d ''` reads
+          # the whole value, so a YAML `|` block with one pattern per line
+          # works too; a plain `read` stops at the first newline, and the
+          # other patterns were silently reviewed (devops#12 selftest,
+          # 2026-10-09). It returns 1 at the end of input, hence `|| true`.
+          read -r -d '' -a pats <<<"${GENERATED_PATHS}" || true
           gen=()
           for p in "${pats[@]}"; do
             gen+=(":(glob)${p}")
@@ -413,7 +418,9 @@ jobs:
           BLOCK
             note=""
             if [ -n "$GENERATED_PATHS_NOTE" ]; then note=" ${GENERATED_PATHS_NOTE}"; fi
-            T="${T//__PATHS__/${GENERATED_PATHS}}"
+            # One line, space-separated, even when the input is a `|` block.
+            read -r -d '' -a pats <<<"${GENERATED_PATHS}" || true
+            T="${T//__PATHS__/${pats[*]}}"
             T="${T//__NOTE__/${note}}"
             printf '\n%s\n\n' "$T" >>"$P"
             cat "$STATE/generated.md" >>"$P"
