@@ -92,13 +92,18 @@ person opens a PR.
 1. **Label** — create `needs-human-review` in the repo (Issues → Labels). A
    missing label only degrades to a warning in the run log, so do it up
    front where it's visible.
-2. **Workflows** — repo → Actions → New workflow → under **"By sentfutures"**
-   choose **"Claude PR review bot — reviews every PR"** → Configure → replace
-   the two `FILL_ME_IN` values (`required_check`: your CI check's name as it
-   appears on a PR, or delete the line if there is none; `escalate_to`:
-   maintainer GitHub logins) → commit. Repeat for **"Claude @mention handler
-   — on-demand"** (nothing to fill in). Equivalent: copy both files from this
-   repo's `callers/` into your `.github/workflows/`.
+2. **Workflows** — copy `callers/claude-pr-review.caller.yml` and
+   `callers/claude-mention.caller.yml` from this repo into your
+   `.github/workflows/` as `claude-pr-review.yml` and `claude-mention.yml`.
+   In the review caller, replace the two `FILL_ME_IN` values:
+   - `required_check`: your CI check's name as it appears on a PR, or delete
+     the line if there is none.
+   - `escalate_to`: maintainer GitHub logins.
+
+   The mention caller has nothing to fill in. Commit both. (Until 2026-10-09
+   these were also offered as org workflow templates in `sentfutures/.github`.
+   They were retired: no repo had been set up from them, repos under personal
+   accounts can't see org templates, and the second copy kept drifting.)
 3. **Skill** — copy `skills/pr-review-watch/` from this repo into your repo's
    `.claude/skills/` and complete its "In this repo" fill-in bullets from
    your repo's own CLAUDE.md and CI. That skill is how a Claude Code session
@@ -227,8 +232,7 @@ Three tiers, in order of how often they should happen:
    Code: *"in sentfutures/devops, add <X> to the review bot's prompt and open
    a PR"*.
 3. **Breaking changes** (rename/remove an input): do not ride `v1`. Tag `v2`,
-   update `callers/` and the `sentfutures/.github` templates to `@v2`, and
-   add a changelog entry below.
+   update `callers/` to `@v2`, and add a changelog entry below.
 4. **Never** edit the verdict-verification step's jq or the tool allowlist
    without reading their inline comments first — each line exists because of
    a production incident, and the selftest may not catch the failure mode you
