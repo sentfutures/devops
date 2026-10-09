@@ -75,6 +75,11 @@ decide). It discovers the repo's CI check name, creates the
 merge. The same plugin ships **`/disable-review-bot`** — the emergency stop
 (see "Disabling the bot" below).
 
+The `/` menu lists both skills under the plugin's name, as
+`/review-bot:install-review-bot` and `/review-bot:disable-review-bot`.
+Typing `/install-review-bot` also works. Neither appears until the plugin is
+installed: opening this repo doesn't load them.
+
 This works outside sentfutures too — on a personal repo or another org. This
 repo is public, so the `uses:` reference resolves from any owner; what does
 not come for free is the app-and-secret pair the org-wide setup provides, so
