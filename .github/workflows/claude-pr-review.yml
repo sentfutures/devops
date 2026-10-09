@@ -352,15 +352,22 @@ jobs:
           # 900 worked; Sonnet 5 paged by the file's +4884 count and stopped
           # six lines short of the diff's end.
           #
-          # Tools: the review has had no Grep or Glob tool since at least
-          # Claude Code 2.1.293 (factory-farm-em#40, 2026-10-08); a call is
-          # refused with "search file contents with `grep` via the Bash tool
-          # instead". On 2.1.295, read-only Bash commands (`grep`, `sed -n`,
-          # `tail`) run despite the `gh pr`-only allowlist, while `python3 -c`
-          # is still refused. Diffs are asked for through Read because the
-          # coverage step counts only Read calls: Sonnet 5 read parts of a
-          # diff with `sed -n` and `tail` on #40 (2026-10-09, run
-          # 37914095042), lines that then showed as unread.
+          # Tools: the review has no Grep or Glob tool. Claude Code 2.1.117's
+          # native build, which the action installs, replaced both "by
+          # embedded `bfs` and `ugrep` available through the Bash tool"
+          # (changelog). A Grep call is refused with "search file contents
+          # with `grep` via the Bash tool instead" (#40, 2026-10-08). Naming
+          # either tool in --allowedTools would restore both (docs,
+          # tools-reference); `grep` through Bash does the same job without
+          # touching the allowlist. Claude Code also runs a built-in set of
+          # read-only commands "without a permission prompt in every mode"
+          # (docs, permissions: `cat`, `head`, `tail`, `grep`, `find`,
+          # read-only `git`, …; "not configurable"). So those run despite the
+          # `gh pr`-only allowlist, while `python3 -c` is still refused. Diffs
+          # are asked for through Read because coverage counts only Read
+          # calls: Sonnet 5 read parts of a diff with `sed -n` and `tail` on
+          # #40 (2026-10-09, run 37914095042), and those lines then showed as
+          # unread.
           cat >>"$P" <<'BLOCK'
           Review this pull request. The PR branch is already checked out in
           the current working directory, and the diff of each changed file
@@ -672,7 +679,9 @@ jobs:
           # verdict gate went back to being a backstop. It cost about $0.07
           # and 25 s more per run there. `high` alone does not fix #11: on
           # main's workflow, without per-file diffs, it still approved #40
-          # after reading 0 and 5 of 25 diffs.
+          # after reading 0 and 5 of 25 diffs. A `model` input without
+          # effort support ignores the flag: no warning or error (Haiku 4.5,
+          # 2.1.295, tested locally 2026-10-09).
           claude_args: |
             --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
             --disallowedTools "Task"
