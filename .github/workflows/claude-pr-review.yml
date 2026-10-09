@@ -235,7 +235,14 @@ jobs:
           done <"$state/numstat"
 
           # What "read" means for these diffs, used by the verdict gate during
-          # the review and by the coverage steps after it.
+          # the review and by the coverage steps after it: the lines successful
+          # Read calls returned cover all of a diff's lines. Returned, not
+          # asked for: Read stops at its 25,000-token cap without an error. On
+          # 2026-10-09 (Claude Code 2.1.295) a 2,000-line diff came back as
+          # lines 1-935, marked truncatedByTokenCap, and a count that trusted
+          # the call's default 2,000-line limit scored it as read. The result's
+          # own startLine/numLines say what the agent saw. A result without
+          # them (an older format) falls back to the call's offset/limit.
           cat >"$state/coverage.jq" <<'JQ'
           # Input (-s): one or more arrays of SDK messages, i.e. a pass's
           # execution file or the session transcript as an array.
@@ -247,13 +254,27 @@ jobs:
           (add // []) as $msgs
           | [ $msgs[] | select(.type == "user") | .message.content[]?
               | select(.type == "tool_result" and (.is_error // false)) | .tool_use_id ] as $failed
+          # Each tool result's structured form, by tool_use_id: the execution
+          # file calls it tool_use_result, the transcript toolUseResult, and
+          # each user message carries one tool result.
+          | ( [ $msgs[] | select(.type == "user")
+                | ((.tool_use_result // .toolUseResult) | objects) as $r
+                | .message.content[]? | select(.type == "tool_result")
+                | { key: .tool_use_id, value: $r } ] | from_entries ) as $shown
           | [ $msgs[] | select(.type == "assistant") | .message.content[]?
               | select(.type == "tool_use" and .name == "Read")
               | select(.id as $id | any($failed[]; . == $id) | not)
               | (.input.file_path // "") as $f
-              | ([(.input.offset // 1 | tonumber), 1] | max) as $first
+              | $shown[.id] as $r
+              | ( if ($r.file.numLines? | type) == "number" then
+                    ($r.file.startLine // 1 | tonumber) as $first
+                    | [$first, $first + $r.file.numLines - 1]
+                  elif $r == null then
+                    ([(.input.offset // 1 | tonumber), 1] | max) as $first
+                    | [$first, $first + (.input.limit // 2000 | tonumber) - 1]
+                  else empty end ) as $range
               | { file: (if ($f | startswith("/")) then $f else "\(env.GITHUB_WORKSPACE)/\($f)" end),
-                  range: [$first, $first + (.input.limit // 2000 | tonumber) - 1] } ] as $reads
+                  range: $range } ] as $reads
           | $m | map(. as $e | . + { read: ([ $reads[] | select(.file == $e.diff) | .range ] | covers($e.lines)) })
           JQ
 
@@ -322,9 +343,10 @@ jobs:
           can. Tests, docs, and config files are part of the review, not
           just source code: a test can assert the wrong behaviour, a config
           can set a wrong value, and a doc can promise something the code
-          does not do. Read returns 2,000 lines at a time by default: for a
-          longer diff, call it again with `offset` and `limit` until you
-          reach the end. Only then read the surrounding source wherever a
+          does not do. Read returns a long diff a page at a time (at most
+          2,000 lines, fewer when the lines are long, and it says where it
+          stopped): call it again with `offset` and `limit` until you reach
+          the last line. Only then read the surrounding source wherever a
           hunk needs context.
           BLOCK
             T="${T//__COUNT__/${DIFF_COUNT}}"
@@ -411,14 +433,27 @@ jobs:
           T="${T//__PR__/${PR_NUMBER}}"
           printf '\n%s\n' "$T" >>"$P"
 
+          # "Do not describe how you reviewed": with the per-file diffs and
+          # the verdict gate, all three approvals on Deco354/factory-farm-em#40
+          # (2026-10-08) opened with "I read every diff in this PR to its last
+          # line" or similar, our instructions echoed back as workflow jargon
+          # the PR author cannot act on. Coverage is measured, not
+          # self-reported: the job summary and the warning comment carry it.
           read -r -d '' T <<'BLOCK' || true
           Leave feedback with `mcp__github_inline_comment__create_inline_comment`
-          for each specific issue (one comment per issue, on the relevant line).
+          for each specific issue (one comment per issue, on the relevant line
+          of the changed file: its own path and line number, not the diff
+          file's).
 
           Then submit exactly ONE formal review verdict for PR
           #__PR__. First write your summary
           to a file named `review-body.md` in the repository root using the
           Write tool (this keeps the command below free of shell quoting).
+          Write it for the PR's author, about the change and what you found
+          in it. Do not describe how you reviewed: never mention the diff
+          files, how many files or lines you read, or any check on your
+          reading. Those are internal to this workflow, which reports
+          coverage separately.
 
           Your verdict MUST agree with your own summary. Before running the
           command, re-read what you wrote:
@@ -526,10 +561,13 @@ jobs:
             cat <<'MSG'
           This is not an error, and nothing is wrong with the command. Read
           each of these diffs now, to its last line, with the Read tool: all
-          of them in one turn if you can, using `offset` and `limit` past
-          2,000 lines. Leave an inline comment for each significant issue you
-          find in them. Update review-body.md so it covers them, then run
-          your `gh pr review` command again.
+          of them in one turn if you can. Read returns a long diff a page at
+          a time, so keep calling it with `offset` and `limit` until you
+          reach the last line. Leave an inline comment for each significant
+          issue you find in them. Update review-body.md so it covers them,
+          then run your `gh pr review` command again. This check is internal
+          to the review workflow: do not mention it, or the diff files, in
+          review-body.md.
           MSG
           } >&2
           exit 2
@@ -595,9 +633,9 @@ jobs:
 
       # Did the review read every diff? The prompt asks it to, but the agent
       # decides, so measure it from the execution file rather than trusting
-      # the summary: a diff counts as read only when the agent's successful
-      # Read calls covered every one of its lines. Read returns 2,000 lines
-      # per call unless given offset/limit, and a #29 run read lines 1-80 of
+      # the summary: a diff counts as read only when the lines the agent's
+      # successful Read calls returned cover every one of its lines (see
+      # coverage.jq in "Write per-file diffs"). A #29 run read lines 1-80 of
       # a 461-line file and moved on. Report-only by decision (issue #11,
       # 2026-10-08: tying the verdict to coverage would block too many PRs):
       # this never fails the check or touches the verdict. It decides whether
@@ -643,15 +681,19 @@ jobs:
 
           __LIST__
 
-          Read each of them now, every line, with the Read tool (2,000 lines
-          at a time by default; use `offset` and `limit` to page through a
-          longer one), plus any surrounding source a hunk needs. Leave an
-          inline comment for each specific issue, as before.
+          Read each of them now, every line, with the Read tool (it returns a
+          long diff a page at a time; keep calling it with `offset` and
+          `limit` until you reach the last line), plus any surrounding source
+          a hunk needs. Leave an inline comment for each specific issue, as
+          before.
 
           Then submit exactly ONE more verdict, for the whole PR: what you
           reviewed before plus these files, under the same rules as before.
-          Write the summary to `review-body.md` first, and say in it which
-          files this pass added. Run ONE of these — nothing else:
+          Write the summary to `review-body.md` first. Open it with one line
+          saying it replaces your earlier review of this commit, then cover
+          the whole PR. As before, write about the change and what you found,
+          not about this check or the diff files. Run ONE of these — nothing
+          else:
           - Significant issues found anywhere in the PR:
             `gh pr review __PR__ --request-changes --body-file review-body.md`
           - Correct, no significant issues:

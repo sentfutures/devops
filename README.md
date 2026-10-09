@@ -310,15 +310,19 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   skipping every test and doc. So a Claude Code hook, passed through the
   action's `settings` input, refuses the review's `gh pr review` while any
   diff is unread and names what is left; it refuses at most twice. A step
-  counts the lines each diff's Read calls covered; if any diff is unread, a
-  second action run resumes the review's session to read the rest and file
-  one more verdict for the whole PR, which the verify step checks as before.
-  Anything still unread gets a PR comment with a ready-to-paste `@claude`
-  prompt. Coverage is report-only by decision: tying the verdict to it
-  would block too many PRs. Cost: a full read is what September's reviews
-  cost (18–24 turns and $0.49–0.99 on 2,000–6,000-line PRs, against ~10
-  turns and ~$0.13 for the partial reads). No input renamed; callers need no
-  change.
+  counts the lines each diff's Read calls returned — not the lines they
+  asked for: Read stops at 25,000 tokens without an error, and on
+  2026-10-09 a 2,000-line diff came back as lines 1–935. If any diff is
+  unread, a second action run resumes the review's session to read the
+  rest and file one more verdict for the whole PR, which the verify step
+  checks as before. Anything still unread gets a PR comment with a
+  ready-to-paste `@claude` prompt. Coverage is report-only by decision:
+  tying the verdict to it would block too many PRs. The review body is
+  told to describe the change, not how it was reviewed: the gated
+  approvals on #40 opened with "I read every diff in this PR to its last
+  line". Cost: a full read is what September's reviews cost (18–24 turns
+  and $0.49–0.99 on 2,000–6,000-line PRs, against ~10 turns and ~$0.13 for
+  the partial reads). No input renamed; callers need no change.
 - **v1, 2026-09-30** — the post-approval CI cross-check is removed, and
   `required_check` is now prompt context only. The verify step had polled the
   named job for a fixed 90s after an approval and failed `review /

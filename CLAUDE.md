@@ -64,8 +64,10 @@ each other via `$GITHUB_OUTPUT`:
    get no diff. The review must not depend on `gh pr diff`: above Claude
    Code's tool-output limit its output arrives as a 2 KB preview, and it
    takes no path argument (#11). Also writes `coverage.jq`, the one
-   definition of "read": successful Read calls covered all of a diff's
-   lines.
+   definition of "read": the lines successful Read calls *returned* (the
+   result's `startLine`/`numLines`) cover all of a diff's lines. Not the
+   call's `limit`: Read stops early at its 25,000-token cap, without an
+   error.
 4. **Compose review prompt** — bash assembles the prompt from fixed quoted
    heredocs, the list of diff files, and the `workflow_call` inputs
    (`extra_instructions`, `required_check`, `generated_paths*`). The
