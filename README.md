@@ -17,13 +17,21 @@ logic each encode a real incident from that period — the inline comments in
 
 On every pull request, claude[bot]:
 
-1. reads the diff and leaves **inline comments** on specific lines;
+1. reads the diff of **every changed file** — each saved as its own diff
+   file, with your `generated_paths` left out — and leaves **inline
+   comments** on specific lines;
 2. files exactly one **verdict** — approve, or request changes — with a
    summary that must agree with itself (a "minor nit" summary files as an
    approval, never as a limbo comment);
 3. is **checked up on**: a verification step confirms a verdict for the
    current commit actually landed, and fails the `review / claude-review`
-   check if the bot looked but wouldn't commit to a verdict;
+   check if the bot looked but wouldn't commit to a verdict. A coverage
+   check counts which diffs it actually read. The bot's verdict is held
+   back (at most twice) until it has read every diff, and a follow-up pass
+   reads any it still skipped. Anything left unread after that is named in
+   a PR comment with a ready-to-paste `@claude` prompt. Coverage is
+   report-only — it never fails the check, and a verdict is never
+   withheld or downgraded for unread files;
 4. **escalates to humans** when it can't supply a verdict: the
    `needs-human-review` label plus a review request to the maintainers named
    in your caller.
@@ -124,7 +132,9 @@ the GitHub web editor. Most customization belongs in `extra_instructions`:
 ```
 
 All inputs: `required_check`, `generated_paths` + `generated_paths_note`
-(skim committed generated data instead of analyzing it), `escalate_to`,
+(leave bulk committed generated data out of the review — whitespace-separated
+git globs such as `outputs/**`; not for lockfiles, whose small diffs are
+where dependency changes show), `escalate_to`,
 `escalation_label` (default `needs-human-review`), `extra_instructions`,
 `model`. Each is documented at the top of `claude-pr-review.yml`. What is
 *not* an input — the verdict rules, the tool allowlist, the verification
@@ -233,6 +243,7 @@ Three tiers, in order of how often they should happen:
 | `gh api` 403s in the verify or escalation steps | The caller's `permissions:` block was trimmed — restore it exactly as in `callers/claude-pr-review.caller.yml`. |
 | Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
 | No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
+| A PR comment from github-actions says "The automated review of `<sha>` did not read N of M changed files" | The first pass skipped those diffs and the follow-up pass did not finish them (the job summary's "Review coverage" and the "Review the diffs the first pass did not read" log say why). The verdict stands but does not cover those files: post the comment's `@claude` prompt, or review them yourself. If it keeps happening, open an issue here with the run link. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
 | Review summary says it could not read `statusCheckRollup` / CI ("Resource not accessible by integration"), or caveats its verdict on not having seen the tests | The review is told it cannot read CI and must not try or caveat (the prompt block in `claude-pr-review.yml`). If that wording is back, the prompt on `v1` has regressed (it happened 2026-09-17 to 21): roll `v1` back per `release.yml`'s header and open an issue here. Nothing to fix in your caller — `required_check` is prompt context only. |
 
@@ -279,6 +290,58 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **v1, 2026-10-09** — the review reads every non-generated diff, and is
+  checked for it (#11). On Deco354/factory-farm-em#29 (25 files, ~150 KB of
+  diff) all seven approvals between 2026-10-06 and 10-08 said they had read
+  only part of the PR, and none had read `analysis/summary.py`, which
+  computes its headline numbers; `@claude` reviews of the unread files then
+  found a bug the approvals had missed. Across the five consuming repos, 15
+  of 134 approvals since 2026-09-01 admitted unread code. Cause: `gh pr diff`
+  was the review's only view of the diff; above Claude Code's tool-output
+  limit it arrives as a 2 KB preview plus a saved file, it takes no path
+  argument, and nothing told the review to open the file. Sonnet 5 (the
+  action's default until late September) opened it in 2 of 2 sampled runs,
+  Sonnet 5.5 in 1 of 9. Now the workflow writes one diff per changed file
+  (`git diff` of the merge commit; checkout is `fetch-depth: 2`) and lists
+  them in the prompt; `generated_paths` files get no diff and are listed by
+  name and size only, so `generated_paths` is now whitespace-separated git
+  globs (both values in use on 2026-10-09, `outputs/**` and `uv.lock`,
+  already are). Withheld now means unseen, not skimmed, so lockfiles are no
+  longer suggested for it: factory-farm-em's `uv.lock` changes ran 2–56
+  lines, and it is the only place indirect dependency and source changes
+  show; Deco354/factory-farm-em#44 stops withholding it. The
+  list alone was not enough: in a replay of #29 (factory-farm-em#40) the
+  first pass read 12, 12 and 7 of 24 diffs under three prompt wordings,
+  skipping every test and doc. So a Claude Code hook, passed through the
+  action's `settings` input, refuses the review's `gh pr review` while any
+  diff is unread and names what is left, down to the unread lines (Sonnet 5
+  twice paged to a few lines short of a 4,890-line diff's end and, told
+  only "not read to the end", was held back twice); it refuses at most
+  twice. The prompt asks for long diffs about 800 lines at a time. A step
+  counts the lines each diff's Read calls returned — not the lines they
+  asked for: Read stops at 25,000 tokens without an error, and on
+  2026-10-09 a 2,000-line diff came back as lines 1–935. If any diff is
+  unread, a second action run resumes the review's session to read the
+  rest and file one more verdict for the whole PR, which the verify step
+  checks as before. Anything still unread gets a PR comment with a
+  ready-to-paste `@claude` prompt. Coverage is report-only by decision:
+  tying the verdict to it would block too many PRs. The review body is
+  told to describe the change, not how it was reviewed: the gated
+  approvals on #40 opened with "I read every diff in this PR to its last
+  line". Both passes run at `--effort high`. Claude Code defaults Sonnet
+  5.5 to `medium` effort, and Sonnet 5 to `high`, so effort changed along
+  with the action's default model. On #40, Sonnet 5.5 read 9–13 of 25
+  diffs before its first verdict attempt at `medium`, and 24 of 25 at
+  `high`. `high` alone is not enough: on the old workflow it still
+  approved #40 after reading 0 and 5 of 25 diffs. The prompt no longer
+  names the Grep and Glob tools, which Claude Code no longer has. It asks
+  for `grep` through Bash to search, and Read for everything else: Claude
+  Code now lets read-only Bash commands such as `sed -n` through despite
+  the allowlist, and coverage counts only Read. Cost: a full read is what
+  September's reviews cost (18–24 turns and $0.49–0.99 on
+  2,000–6,000-line PRs, against ~10 turns and ~$0.13 for the partial
+  reads); on #40, with a 4,890-line test file added, about $1.00. No input
+  renamed; callers need no change.
 - **v1, 2026-09-30** — the post-approval CI cross-check is removed, and
   `required_check` is now prompt context only. The verify step had polled the
   named job for a fixed 90s after an approval and failed `review /
