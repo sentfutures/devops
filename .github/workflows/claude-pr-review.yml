@@ -247,10 +247,14 @@ jobs:
           # Input (-s): one or more arrays of SDK messages, i.e. a pass's
           # execution file or the session transcript as an array.
           # $m: the manifest, one {path, diff, lines} per diff.
-          # Output: the manifest with `read` set on every entry.
-          def covers($n):  # input: [[first, last], ...] line ranges read
-            ($n == 0) or
-            (reduce sort[] as $r (0; if $r[0] <= . + 1 then ([., $r[1]] | max) else . end) >= $n);
+          # Output: the manifest with `read` and `unread` (the line ranges
+          # not yet read, [[first, last], ...]) set on every entry.
+          def gaps($n):  # input: [[first, last], ...] line ranges read
+            reduce sort[] as $r ({next: 1, out: []};
+              (if $r[0] > .next and .next <= $n
+               then .out += [[.next, ([$r[0] - 1, $n] | min)]] else . end)
+              | .next = ([.next, $r[1] + 1] | max))
+            | .out + (if .next <= $n then [[.next, $n]] else [] end);
           (add // []) as $msgs
           | [ $msgs[] | select(.type == "user") | .message.content[]?
               | select(.type == "tool_result" and (.is_error // false)) | .tool_use_id ] as $failed
@@ -275,7 +279,25 @@ jobs:
                   else empty end ) as $range
               | { file: (if ($f | startswith("/")) then $f else "\(env.GITHUB_WORKSPACE)/\($f)" end),
                   range: $range } ] as $reads
-          | $m | map(. as $e | . + { read: ([ $reads[] | select(.file == $e.diff) | .range ] | covers($e.lines)) })
+          | $m | map(. as $e
+              | ([ $reads[] | select(.file == $e.diff) | .range ] | gaps($e.lines)) as $g
+              | . + { read: ($g == []), unread: $g })
+          JQ
+          # One line per unread diff, for the gate's refusal and the follow-up
+          # prompt: the unread line ranges, so a review that paged one line
+          # short of the end is told exactly that. Sonnet 5 on
+          # Deco354/factory-farm-em#40 (2026-10-09, 2 runs) read to line 4889
+          # and to 4883 of a 4,890-line diff, was told only "not read to the
+          # end", re-read the same range, and was held back twice.
+          cat >"$state/unread.jq" <<'JQ'
+          def span: if .[0] == .[1] then "\(.[0])" else "\(.[0])–\(.[1])" end;
+          .[] | select(.read | not)
+          | "- `\(.path)`: `\(.diff)` (\(.lines) lines; not read yet: "
+            + (if .unread == [[1, .lines]] then "all of it"
+               elif .unread == [[.unread[0][0], .unread[0][0]]] then "line \(.unread[0][0])"
+               else "lines " + ([.unread[:8][] | span] | join(", "))
+                    + (if (.unread | length) > 8 then ", …" else "" end) end)
+            + ")"
           JQ
 
           echo "${n} diff(s) to review:"; cat "$state/files.md"
@@ -323,6 +345,12 @@ jobs:
           # source diffs a few at a time, most important first. It skipped
           # all 6 test files and both docs, 12 of 24 diffs in each run, then
           # approved and said it had read them.
+          #
+          # "About 800 lines at a time", and "the diff lines count": on #40
+          # (2026-10-09) Sonnet 5.5 asked for 2,000, 1,400 and 1,100 lines of
+          # a 4,890-line diff, each page over Read's 25,000-token cap, before
+          # 900 worked; Sonnet 5 paged by the file's +4884 count and stopped
+          # six lines short of the diff's end.
           cat >>"$P" <<'BLOCK'
           Review this pull request. The PR branch is already checked out in
           the current working directory, and the diff of each changed file
@@ -343,11 +371,12 @@ jobs:
           can. Tests, docs, and config files are part of the review, not
           just source code: a test can assert the wrong behaviour, a config
           can set a wrong value, and a doc can promise something the code
-          does not do. Read returns a long diff a page at a time (at most
-          2,000 lines, fewer when the lines are long, and it says where it
-          stopped): call it again with `offset` and `limit` until you reach
-          the last line. Only then read the surrounding source wherever a
-          hunk needs context.
+          does not do. Read returns at most 2,000 lines per call, and a page
+          over about 25,000 tokens fails or comes back cut short. So read a
+          long diff about 800 lines at a time (`offset` 1, 801, 1601, …)
+          until you reach its last line: the "diff lines" count in the list,
+          not its +/− counts. Only then read the surrounding source wherever
+          a hunk needs context.
           BLOCK
             T="${T//__COUNT__/${DIFF_COUNT}}"
             printf '\n%s\n\n' "$T" >>"$P"
@@ -550,7 +579,7 @@ jobs:
           # does not parse rather than give up on the whole count.
           list=$(jq -R 'fromjson? // empty' "$transcript" | jq -s . |
             jq -s --slurpfile m "$state/manifest.jsonl" -f "$state/coverage.jq" |
-            jq -r '.[] | select(.read | not) | "- `\(.path)`: `\(.diff)` (\(.lines) lines)"') || exit 0
+            jq -r -f "$state/unread.jq") || exit 0
           [ -n "$list" ] || exit 0
           echo $((held + 1)) >"$state/gate-held"
           {
@@ -560,10 +589,10 @@ jobs:
             echo
             cat <<'MSG'
           This is not an error, and nothing is wrong with the command. Read
-          each of these diffs now, to its last line, with the Read tool: all
-          of them in one turn if you can. Read returns a long diff a page at
-          a time, so keep calling it with `offset` and `limit` until you
-          reach the last line. Leave an inline comment for each significant
+          the unread lines listed for each diff now, with the Read tool: all
+          of them in one turn if you can. Start each call at the first unread
+          line (`offset`) and read about 800 lines per call until you reach
+          the diff's last line. Leave an inline comment for each significant
           issue you find in them. Update review-body.md so it covers them,
           then run your `gh pr review` command again. This check is internal
           to the review workflow: do not mention it, or the diff files, in
@@ -672,7 +701,7 @@ jobs:
           if [ "$unread" -eq 0 ]; then
             exit 0
           fi
-          list=$(jq -r '.[] | select(.read | not) | "- `\(.path)`: `\(.diff)` (\(.lines) lines)"' "$STATE/coverage.json")
+          list=$(jq -r -f "$STATE/unread.jq" "$STATE/coverage.json")
           echo "$list"
 
           read -r -d '' T <<'BLOCK' || true
@@ -681,11 +710,11 @@ jobs:
 
           __LIST__
 
-          Read each of them now, every line, with the Read tool (it returns a
-          long diff a page at a time; keep calling it with `offset` and
-          `limit` until you reach the last line), plus any surrounding source
-          a hunk needs. Leave an inline comment for each specific issue, as
-          before.
+          Read the unread lines listed for each of them now, with the Read
+          tool: start each call at the first unread line (`offset`) and read
+          about 800 lines per call until you reach the diff's last line. Also
+          read any surrounding source a hunk needs. Leave an inline comment
+          for each specific issue, as before.
 
           Then submit exactly ONE more verdict, for the whole PR: what you
           reviewed before plus these files, under the same rules as before.

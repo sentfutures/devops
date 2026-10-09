@@ -309,7 +309,10 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   first pass read 12, 12 and 7 of 24 diffs under three prompt wordings,
   skipping every test and doc. So a Claude Code hook, passed through the
   action's `settings` input, refuses the review's `gh pr review` while any
-  diff is unread and names what is left; it refuses at most twice. A step
+  diff is unread and names what is left, down to the unread lines (Sonnet 5
+  twice paged to a few lines short of a 4,890-line diff's end and, told
+  only "not read to the end", was held back twice); it refuses at most
+  twice. The prompt asks for long diffs about 800 lines at a time. A step
   counts the lines each diff's Read calls returned — not the lines they
   asked for: Read stops at 25,000 tokens without an error, and on
   2026-10-09 a 2,000-line diff came back as lines 1–935. If any diff is

@@ -76,7 +76,8 @@ each other via `$GITHUB_OUTPUT`:
 5. **Hold the verdict until every diff is read** — writes a Claude Code
    PreToolUse hook, passed to the action as its `settings` input. While
    any diff is unread, the hook refuses `gh pr review` and names the
-   unread diffs. It refuses at most twice, and lets the verdict through
+   unread diffs and their unread line ranges (`unread.jq`, also used by
+   the follow-up prompt). It refuses at most twice, and lets the verdict through
    whenever it cannot tell. Prompt wording alone got 7–12 of 24 diffs read
    on factory-farm-em#40.
 6. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
