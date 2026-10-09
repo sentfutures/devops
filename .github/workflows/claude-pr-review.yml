@@ -351,16 +351,26 @@ jobs:
           # a 4,890-line diff, each page over Read's 25,000-token cap, before
           # 900 worked; Sonnet 5 paged by the file's +4884 count and stopped
           # six lines short of the diff's end.
+          #
+          # Tools: the review has had no Grep or Glob tool since at least
+          # Claude Code 2.1.293 (factory-farm-em#40, 2026-10-08); a call is
+          # refused with "search file contents with `grep` via the Bash tool
+          # instead". On 2.1.295, read-only Bash commands (`grep`, `sed -n`,
+          # `tail`) run despite the `gh pr`-only allowlist, while `python3 -c`
+          # is still refused. Diffs are asked for through Read because the
+          # coverage step counts only Read calls: Sonnet 5 read parts of a
+          # diff with `sed -n` and `tail` on #40 (2026-10-09, run
+          # 37914095042), lines that then showed as unread.
           cat >>"$P" <<'BLOCK'
           Review this pull request. The PR branch is already checked out in
           the current working directory, and the diff of each changed file
-          is saved as its own file, listed below. Read the diffs with the
-          Read tool. Do not run `gh pr diff`: on a large PR its output is too
-          long to be shown to you and arrives as a 2 KB preview. To read
-          other files, use the Read, Grep, and Glob tools — do NOT use git,
-          cat, sed, grep, or find via Bash: only the `gh pr` subcommands
-          below are permitted, and any other Bash command is denied and just
-          wastes turns.
+          is saved as its own file, listed below. Read the diffs, and any
+          other file you need, with the Read tool, not through Bash. Do not
+          run `gh pr diff`: on a large PR its output is too long to be shown
+          to you and arrives as a 2 KB preview. There is no Grep or Glob
+          tool: to search file contents, run `grep` through Bash. Use Bash
+          for nothing else but the `gh pr` subcommands below; most other
+          commands are denied and just waste turns.
           BLOCK
 
           if [ "$DIFF_COUNT" -gt 0 ]; then
@@ -653,9 +663,20 @@ jobs:
           # summary channel, and across nine high-traffic PRs the review had
           # never once posted a plain comment. Keeping it only offered a
           # weaker exit than the three verdicts.
+          # --effort high: Claude Code defaults Sonnet 5.5, the action's
+          # default model since late September, to `medium` effort, and
+          # Sonnet 5 to `high` (docs, model-config, "Default effort levels").
+          # On factory-farm-em#40 (2026-10-09, 2 runs each), Sonnet 5.5 read
+          # 9–13 of 25 diffs before its first verdict attempt at the
+          # default, and 24 of 25 with `high`, as Sonnet 5 did, so the
+          # verdict gate went back to being a backstop. It cost about $0.07
+          # and 25 s more per run there. `high` alone does not fix #11: on
+          # main's workflow, without per-file diffs, it still approved #40
+          # after reading 0 and 5 of 25 diffs.
           claude_args: |
             --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
             --disallowedTools "Task"
+            --effort high
             ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
@@ -754,7 +775,8 @@ jobs:
       # what is still unread.
       #
       # `with:` mirrors "Run Claude Code Review". Keep the two claude_args
-      # allowlists identical — the comments on the first explain each entry.
+      # identical apart from --resume: the comments on the first explain
+      # each entry.
       - name: Review the diffs the first pass did not read
         id: claude-followup
         if: >-
@@ -774,6 +796,7 @@ jobs:
             --resume ${{ steps.claude-review.outputs.session_id }}
             --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
             --disallowedTools "Task"
+            --effort high
             ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
 
       # Report-only, like the measurement: what the review read over both

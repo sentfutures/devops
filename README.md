@@ -323,9 +323,20 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
   tying the verdict to it would block too many PRs. The review body is
   told to describe the change, not how it was reviewed: the gated
   approvals on #40 opened with "I read every diff in this PR to its last
-  line". Cost: a full read is what September's reviews cost (18–24 turns
-  and $0.49–0.99 on 2,000–6,000-line PRs, against ~10 turns and ~$0.13 for
-  the partial reads). No input renamed; callers need no change.
+  line". Both passes run at `--effort high`. Claude Code defaults Sonnet
+  5.5 to `medium` effort, and Sonnet 5 to `high`, so effort changed along
+  with the action's default model. On #40, Sonnet 5.5 read 9–13 of 25
+  diffs before its first verdict attempt at `medium`, and 24 of 25 at
+  `high`. `high` alone is not enough: on the old workflow it still
+  approved #40 after reading 0 and 5 of 25 diffs. The prompt no longer
+  names the Grep and Glob tools, which Claude Code no longer has. It asks
+  for `grep` through Bash to search, and Read for everything else: Claude
+  Code now lets read-only Bash commands such as `sed -n` through despite
+  the allowlist, and coverage counts only Read. Cost: a full read is what
+  September's reviews cost (18–24 turns and $0.49–0.99 on
+  2,000–6,000-line PRs, against ~10 turns and ~$0.13 for the partial
+  reads); on #40, with a 4,890-line test file added, about $1.00. No input
+  renamed; callers need no change.
 - **v1, 2026-09-30** — the post-approval CI cross-check is removed, and
   `required_check` is now prompt context only. The verify step had polled the
   named job for a fixed 90s after an approval and failed `review /

@@ -82,8 +82,13 @@ each other via `$GITHUB_OUTPUT`:
    on factory-farm-em#40.
 6. **Run Claude Code Review** — `anthropics/claude-code-action@v1` with a
    narrow tool allowlist (Write, the inline-comment MCP tool, and
-   `gh pr review|diff|view`) and `Task` disallowed. The review **cannot read
-   CI** and the prompt tells it not to try.
+   `gh pr review|diff|view`), `Task` disallowed, and `--effort high`
+   (Claude Code defaults Sonnet 5.5 to `medium`, which read about half the
+   diffs before trying to approve). Claude Code itself also lets read-only
+   Bash commands (`grep`, `sed -n`, `tail`) through, whatever the
+   allowlist says, and has no Grep or Glob tool. The prompt therefore asks
+   for `grep` to search and Read for everything else: coverage counts only
+   Read. The review **cannot read CI** and the prompt tells it not to try.
 7. **Measure which diffs the review read** — from the execution file.
 8. **Review the diffs the first pass did not read** — only when some are
    unread: a second action run resumes the first session
@@ -130,8 +135,8 @@ reintroduce.
   The verdict gate's hook decides only *when* the verdict goes out. It
   must keep its cap on refusals and keep letting the verdict through
   whenever it errors.
-- **The follow-up step repeats the first pass's `claude_args` allowlist.**
-  Change both together.
+- **The follow-up step repeats the first pass's `claude_args`** (allowlist
+  and `--effort`). Change both together.
 - **`show_full_output: true` must already be on `main`** before a failure
   you need to diagnose; PRs editing the workflow self-skip.
 
