@@ -52,12 +52,20 @@ this PR`).
 
 ### The fast path — one skill
 
-One-time, on your own machine:
+If you sign in to Claude Code with the Sentient Futures Claude organization,
+the plugin may already be installed: run `/plugin` and look for
+`review-bot@sentfutures` under **Installed**. See [Making the plugin
+available to every member](#making-the-plugin-available-to-every-member).
+Otherwise, one-time, on your own machine:
 
 ```
 /plugin marketplace add sentfutures/devops
 /plugin install review-bot@sentfutures
 ```
+
+A marketplace added by hand doesn't update itself. Turn auto-update on under
+`/plugin` → **Marketplaces** → `sentfutures` → **Enable auto-update**, or run
+`/plugin marketplace update sentfutures` now and then.
 
 Then, inside any repo you want the bot on, run **`/install-review-bot`** and
 answer its questions (mainly: which maintainers to page when the bot can't
@@ -86,6 +94,59 @@ also the sole PR author the workflow drops them and nobody is paged — the
 `needs-human-review` label is the only signal that a PR went unreviewed. Fill
 `escalate_to` with their login anyway; it starts working the moment a second
 person opens a PR.
+
+### Making the plugin available to every member
+
+This is a one-time step for an Owner or Primary Owner of the Sentient Futures
+Claude organization on claude.ai. Without it, members only find the plugin if
+someone tells them: on 2026-10-09 this README was the only place it was
+mentioned, and it had 4 unique visitors in the previous 14 days.
+
+1. Open claude.ai → **Organization settings → Claude Code → Managed
+   settings** (<https://claude.ai/admin-settings/claude-code>).
+2. Add these two keys to the JSON there. If the editor already has settings,
+   merge the keys in; don't replace what's there.
+
+   ```json
+   {
+     "extraKnownMarketplaces": {
+       "sentfutures": {
+         "source": { "source": "github", "repo": "sentfutures/devops" },
+         "autoUpdate": true
+       }
+     },
+     "enabledPlugins": {
+       "review-bot@sentfutures": true
+     }
+   }
+   ```
+3. Save.
+
+Each member gets the plugin at their next Claude Code start, or within an hour
+in a running session: Claude Code registers the `sentfutures` marketplace,
+installs `review-bot` with its `/install-review-bot` and `/disable-review-bot`
+skills, and keeps it updated. Members see no approval dialog, because plugin
+keys aren't among the settings that need one. To check on a machine, run
+`/plugin` and look for `review-bot@sentfutures`, or check that `claude
+doctor`'s `Managed settings (remote)` line says the settings loaded.
+
+What to know before saving:
+
+- **It applies to everyone in the organization.** A member can't turn off a
+  plugin enabled this way. This plugin is two skills that run only when
+  someone invokes them: no hooks, MCP servers or background processes.
+- **It reaches only sessions authenticated through the organization.** That
+  means members signed in with it, and any `CLAUDE_CODE_OAUTH_TOKEN` it
+  issued. If the review bot's shared account belongs to the organization, its
+  CI runs get these settings too, as they would any managed setting.
+- **Don't add `strictKnownMarketplaces` alongside.** An allowlist blocks
+  every marketplace it doesn't name.
+- **claude.ai's Organization settings → Plugins & skills sync won't work
+  here.** It requires the marketplace repository to be private or internal,
+  and this repo must stay public.
+
+Docs: code.claude.com/docs/en/plugins/org and
+code.claude.com/docs/en/server-managed-settings.
 
 ### The manual path
 

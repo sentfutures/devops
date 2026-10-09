@@ -45,6 +45,13 @@ To exercise the plugin skills locally:
 `/plugin marketplace add sentfutures/devops` then
 `/plugin install review-bot@sentfutures`.
 
+`plugins/review-bot/.claude-plugin/plugin.json` deliberately has no
+`version`, so installs track this repo's commits. Claude Code updates a
+plugin only when its computed version changes. The `"1.0.0"` pinned on
+2026-08-20 kept every install on the August skills through four changes to
+`install-review-bot` (09-10 to 09-30). Don't add a `version` back unless every
+plugin change bumps it.
+
 ## How the review bot works (claude-pr-review.yml)
 
 One job, `claude-review`: a job-level gate, then steps that hand state to
