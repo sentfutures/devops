@@ -367,6 +367,29 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
 
 ## Changelog
 
+- **review-bot plugin, 2026-10-21** — `/install-review-bot` and
+  `/disable-review-bot` find the bot's workflows by what they call, not by
+  name. The plugin reached the org through managed settings on 2026-10-13
+  and was tested end to end on a throwaway repo, sentfutures/review-bot-sandbox:
+  install opened a correct setup PR (its check took the designed
+  `NOT_REVIEWED` path); after merge a test PR got one `APPROVED` verdict and
+  a green check; disable turned the reviewer off and removed only
+  `review / claude-review` from branch protection, and a push then started no
+  run; re-enable restored the protection exactly and the next push was
+  reviewed. Run against real repos, both skills had gaps. On
+  animal-welfare-data-pipeline the reviewer is "Claude Code Review" in
+  `claude-code-review.yml`, so disable's
+  `gh workflow disable "Claude PR review bot"` fails with `could not find any
+  workflows named Claude PR review bot`, and install's filename check would
+  not have seen the repo was onboarded and would have added a second
+  reviewer: two verdicts on every PR. On bluedot a stock `claude.yml` already
+  answers `@claude`, and install would have added a second handler. Now
+  disable finds the caller of `claude-pr-review.yml` and acts on its filename
+  (with `gh workflow list --all`, which a disabled workflow needs), and also
+  checks rulesets for the required check; install stops on any existing
+  caller and asks before adding a handler beside a stock one. Read-only dry
+  runs of the fixed text on both repos did each of these.
+
 - **v1, 2026-10-09** — the review reads every non-generated diff, and is
   checked for it (#11). On Deco354/factory-farm-em#29 (25 files, ~150 KB of
   diff) all seven approvals between 2026-10-06 and 10-08 said they had read
