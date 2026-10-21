@@ -19,29 +19,40 @@ description: Disable (or re-enable) the Claude PR review bot on the current repo
 
 ## Disable in this repo
 
-1. `gh workflow list --repo <owner>/<repo>` and find **"Claude PR review
-   bot"**. Leave **"Claude mention handler"** running unless the user asks —
-   it only acts when explicitly @-mentioned, and it is the documented
-   fallback while the reviewer is off.
-2. `gh workflow disable "Claude PR review bot" --repo <owner>/<repo>` —
-   immediate for new events; a run already in progress finishes (cancel it
-   with `gh run cancel <id>` if the user wants silence now).
+1. Find the reviewer by what it calls, not by its name: it is the workflow
+   file whose `uses:` is
+   `sentfutures/devops/.github/workflows/claude-pr-review.yml@v1`
+   (`grep -l 'workflows/claude-pr-review.yml' .github/workflows/*`, then
+   `gh workflow list --repo <owner>/<repo> --all --json name,path,state` for
+   its state; without `--all` a disabled workflow is left out). The template
+   ships it as "Claude PR review bot" in `claude-pr-review.yml`, but callers
+   get renamed: animal-welfare-data-pipeline's is "Claude Code Review" in
+   `claude-code-review.yml`. Leave the mention handler (the file calling
+   `claude-mention.yml`) running unless the user asks — it only acts when
+   explicitly @-mentioned, and it is the documented fallback while the
+   reviewer is off.
+2. `gh workflow disable <file>.yml --repo <owner>/<repo>`, by the filename
+   step 1 found, which works whatever the display name is — immediate for
+   new events; a run already in progress finishes (cancel it with
+   `gh run cancel <id>` if the user wants silence now).
 3. **Check branch protection before finishing** — this is the step people
-   miss: `gh api repos/<owner>/<repo>/branches/<default>/protection`. If
-   `review / claude-review` is listed as a REQUIRED status check, every PR
-   will now wait forever on a check that never runs. Removing a required
-   check changes the repo's merge gate — confirm with the user, then update
-   the protection to drop it (leave everything else in the protection
-   payload untouched).
+   miss: `gh api repos/<owner>/<repo>/branches/<default>/protection`, and
+   `gh api repos/<owner>/<repo>/rules/branches/<default>` (a ruleset can
+   require the check too). If `review / claude-review` is listed as a
+   REQUIRED status check, every PR will now wait forever on a check that
+   never runs. Removing a required check changes the repo's merge gate —
+   confirm with the user, then update the protection (or ruleset) to drop it
+   (leave everything else in the payload untouched).
 4. Report: what was disabled, whether the required check was removed, and
    that open PRs keep whatever verdicts/labels they already have — don't
    strip `needs-human-review` labels; they still mean what they said.
 
 ## Re-enable
 
-`gh workflow enable "Claude PR review bot" --repo <owner>/<repo>`, restore
-the required check if step 3 removed it, and reviews resume on the next PR
-event (an existing PR can be nudged with a push, or close-and-reopen).
+`gh workflow enable <file>.yml --repo <owner>/<repo>` (the reviewer's file,
+found as in step 1), restore the required check if step 3 removed it, and
+reviews resume on the next PR event (an existing PR can be nudged with a
+push, or close-and-reopen).
 
 ## What not to do
 
