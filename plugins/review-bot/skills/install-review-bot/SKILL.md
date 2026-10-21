@@ -43,12 +43,24 @@ executable version of its install steps.
     value on the user's behalf. Also tell them this install depends on
     `sentfutures/devops` staying public: making it private breaks the
     cross-owner `uses:` and forces a transfer into the org.
-- Check `.github/workflows/` for existing files named `claude-pr-review.yml`
-  or `claude-mention.yml` — if present, this repo may already be onboarded;
-  report instead of overwriting. An existing caller may carry `actions: read`
-  in its `permissions:` block (installs between 2026-09-21 and 2026-09-30 got
-  it for a CI cross-check that has since been removed); it is harmless and
-  needs no action.
+- **Check whether this repo is already onboarded — by content, not by
+  filename.** `grep -l 'sentfutures/devops/.github/workflows/' .github/workflows/*`
+  lists every caller of the shared workflows, whatever it is called:
+  animal-welfare-data-pipeline's reviewer is `claude-code-review.yml` (three
+  of its other workflows match on that path) and its mention handler is
+  `claude.yml`. If either shared workflow is already called, report instead
+  of adding a second caller — two reviewer callers post two verdicts on every
+  PR. An existing caller may carry `actions: read` in its `permissions:` block
+  (installs between 2026-09-21 and 2026-09-30 got it for a CI cross-check
+  that has since been removed); it is harmless and needs no action.
+- **Check for a stock `@claude` handler**: a workflow that calls
+  `anthropics/claude-code-action` directly on `issue_comment`
+  (`grep -l 'anthropics/claude-code-action' .github/workflows/* | xargs grep -l issue_comment`).
+  sentfutures/bluedot's `claude.yml` is one (2026-10-13). Adding
+  `claude-mention.yml` beside it makes every `@claude` run twice and reply
+  twice. Ask the user whether the setup PR should replace theirs with the
+  shared handler or keep theirs and skip `claude-mention.yml`; never remove
+  their file without asking.
 
 ## 2. Discover this repo's facts
 
@@ -93,7 +105,8 @@ executable version of its install steps.
    `.github/workflows/claude-pr-review.yml` and
    `.github/workflows/claude-mention.yml`:
    `gh api repos/sentfutures/devops/contents/callers/claude-pr-review.caller.yml --jq '.content' | base64 -d`
-   (same for `claude-mention.caller.yml`). Fill `required_check` and
+   (same for `claude-mention.caller.yml`, unless step 1 found a stock
+   handler the user chose to keep). Fill `required_check` and
    `escalate_to` with the discovered values; delete the `required_check` line
    entirely if the repo has no CI check. Leave everything else — especially
    the `permissions:` block and the `@v1` pin — exactly as shipped.

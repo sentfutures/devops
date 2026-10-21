@@ -133,7 +133,11 @@ installs `review-bot` with its `/install-review-bot` and `/disable-review-bot`
 skills, and keeps it updated. Members see no approval dialog, because plugin
 keys aren't among the settings that need one. To check on a machine, run
 `/plugin` and look for `review-bot@sentfutures`, or check that `claude
-doctor`'s `Managed settings (remote)` line says the settings loaded.
+doctor`'s `Managed settings (remote)` line says the settings loaded. The
+session that does the install may not list the skills: on 2026-10-13 the
+session that installed the plugin didn't, while a fresh `claude -p` started
+minutes later listed both, and so did the first session once resumed. Start
+a new session, or run `/reload-plugins`.
 
 What to know before saving:
 
@@ -214,8 +218,11 @@ logic — is deliberately unreachable from a caller.
 ## Disabling the bot (when something goes wrong)
 
 - **One repo misbehaving** → run **`/disable-review-bot`** in that repo, or
-  manually: `gh workflow disable "Claude PR review bot"` (re-enable later
-  with `gh workflow enable`). **If `review / claude-review` is a required
+  manually: `gh workflow disable claude-pr-review.yml` (re-enable later
+  with `gh workflow enable`). Use the caller's filename: callers get
+  renamed, and animal-welfare-data-pipeline's is "Claude Code Review" in
+  `claude-code-review.yml`, so the template's name "Claude PR review bot"
+  matches nothing there. **If `review / claude-review` is a required
   status check there, also remove it from branch protection** — otherwise
   every PR waits forever on a check that will never run.
 - **Every repo broken at once, right after a merge to this repo** → the
