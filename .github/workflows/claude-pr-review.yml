@@ -699,6 +699,132 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
+      # When the review stopped on the Claude account's usage limit, say so on
+      # the PR, with the time the limit resets. The action fails the step with
+      # only "Claude execution failed: result is_error:true", so the PR showed
+      # a red check and nothing else; the reason was in the run log alone. On
+      # animal-welfare-data-pipeline, 19 reviews failed this way on 2026-11-14
+      # and 2026-11-15 ("You've hit your 5-hour limit · resets 10:30pm (UTC)"),
+      # during two pushes of a stack of about 20 PRs, and nothing told their
+      # author to wait for the reset and re-run.
+      #
+      # The execution file outlives the failure: the action writes it before
+      # failing the step and sets `execution_file` from it (claude-code-action
+      # v1, base-action/src/execution-file.ts). Its `result` message carries
+      # Claude Code's own wording and `api_error: usage_limit_reached`. The last
+      # `rate_limit_event` with status `rejected` names the window (`five_hour`,
+      # `seven_day`) and its reset time (`resetsAt`, epoch seconds). Either one
+      # is enough to detect the limit.
+      #
+      # One comment per commit and limit window, found again by its marker: a
+      # re-run before the reset fails the same way and must not repeat it.
+      # Report-only, like the coverage warning: the check is already red
+      # because the review step failed, the comment is posted with the job's
+      # own token, and continue-on-error keeps a bug here from changing either.
+      - name: Say so on the PR when a usage limit stopped the review
+        if: >-
+          always() && !cancelled() &&
+          steps.claude-review.outcome == 'failure' &&
+          steps.claude-review.outputs.execution_file != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EXEC_FILE: ${{ steps.claude-review.outputs.execution_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if ! limit=$(jq -c '
+                (map(select(.type == "result")) | last) as $r
+                | (map(select(.type == "rate_limit_event" and .rate_limit_info.status == "rejected"))
+                   | last | .rate_limit_info) as $l
+                | if ($r.is_error // false) and
+                     ($r.api_error == "usage_limit_reached" or
+                      (($r.result // "") | test("hit your .*limit"; "i")))
+                  then {
+                    message: ($r.result // ""),
+                    window: ($l.rateLimitType // ""),
+                    resets_at: ($l.resetsAt // null),
+                    resets: (try ($l.resetsAt | tonumber | strftime("%H:%M UTC on %a %d %b")) catch "")
+                  }
+                  else empty end
+              ' "$EXEC_FILE"); then
+            echo "::warning::Could not read ${EXEC_FILE} to check whether a usage limit stopped the review."
+            exit 0
+          fi
+          if [ -z "$limit" ]; then
+            echo "The review did not stop on a usage limit; the \"Run Claude Code Review\" log says why it failed."
+            exit 0
+          fi
+
+          message=$(jq -r .message <<<"$limit")
+          resets=$(jq -r .resets <<<"$limit")
+          case "$(jq -r .window <<<"$limit")" in
+            five_hour)  what="5-hour usage limit" ;;
+            seven_day*) what="weekly usage limit" ;;
+            *)          what="usage limit" ;;
+          esac
+          # Without a reset time, Claude Code's message is the best "when" (it
+          # says "resets 10:30pm (UTC)"), so it goes inline; with one, it is
+          # quoted after, as the source of the notice.
+          note=""
+          if [ -n "$resets" ]; then
+            when="It resets at **${resets}**."
+            plain="It resets at ${resets}."
+            if [ -n "$message" ]; then note="Claude Code's message: \`${message}\`"; fi
+          elif [ -n "$message" ]; then
+            when="Claude Code said: \`${message}\`."
+            plain="Claude Code said: ${message}."
+          else
+            when="The run did not report when it resets."
+            plain="$when"
+          fi
+          short="${HEAD_SHA:0:7}"
+
+          echo "::error::The review of ${short} stopped before posting a verdict: the review bot's Claude account hit its ${what}. ${plain} Re-run this job after the reset, or push a new commit."
+          {
+            echo "### Review stopped: usage limit"
+            echo
+            echo "The review bot's Claude account hit its ${what}, so no verdict was posted for ${short}. ${when}"
+            if [ -n "$note" ]; then
+              echo
+              echo "$note"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          # The marker names the commit and the window's reset time (or, with
+          # no rate_limit_event, Claude Code's message, which carries it too).
+          key=$(jq -r '.resets_at // .message' <<<"$limit" | tr -cd '[:alnum:]')
+          marker="<!-- claude-review-usage-limit ${HEAD_SHA} ${key} -->"
+          # Read the comments in full before matching: `grep -q` in the
+          # pipeline would close it early, and under pipefail gh's SIGPIPE
+          # would read as "not found" and post a duplicate.
+          comments=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --jq '.[].body' 2>/dev/null || true)
+          if grep -qF -- "$marker" <<<"$comments"; then
+            echo "✓ The PR already says this for ${short} and this limit window."
+            exit 0
+          fi
+          body="${RUNNER_TEMP:-/tmp}/usage-limit-notice.md"
+          {
+            echo "> [!WARNING]"
+            echo "> **The automated review of ${short} stopped before posting a verdict: the review bot's Claude account hit its ${what}.** ${when} Until it resets, every review on this account fails the same way, and so does \`@claude\`."
+            echo ">"
+            echo "> After the reset, open [this run](${RUN_URL}) and choose **Re-run failed jobs**, or push a new commit."
+            if [ -n "$note" ]; then
+              echo ">"
+              echo "> ${note}"
+            fi
+            echo
+            echo "$marker"
+          } >"$body"
+          if gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -F "body=@${body}" >/dev/null; then
+            echo "✓ Posted the usage-limit notice on the PR."
+          else
+            echo "::warning::Could not post the usage-limit notice on the PR; the annotation and the job summary still say it."
+          fi
+
       # Did the review read every diff? The prompt asks it to, but the agent
       # decides, so measure it from the execution file rather than trusting
       # the summary: a diff counts as read only when the lines the agent's

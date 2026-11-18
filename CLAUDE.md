@@ -95,21 +95,28 @@ each other via `$GITHUB_OUTPUT`:
    allowlist says, and has no Grep or Glob tool. The prompt therefore asks
    for `grep` to search and Read for everything else: coverage counts only
    Read. The review **cannot read CI** and the prompt tells it not to try.
-7. **Measure which diffs the review read** — from the execution file.
-8. **Review the diffs the first pass did not read** — only when some are
+7. **Say so on the PR when a usage limit stopped the review** — only when
+   the review step failed. The action writes its execution file before
+   failing, so this reads it: a `result` with `api_error:
+   usage_limit_reached` (or "hit your … limit") gets an `::error::`, a job
+   summary and a PR comment naming the window and its reset time (the last
+   rejected `rate_limit_event`'s `resetsAt`), once per commit and window.
+   Report-only, like coverage; the check is already red.
+8. **Measure which diffs the review read** — from the execution file.
+9. **Review the diffs the first pass did not read** — only when some are
    unread: a second action run resumes the first session
    (`--resume <session_id>`), reads the rest, and files one more verdict for
    the whole PR. `continue-on-error`, so it can never sink the first verdict.
-9. **Report review coverage** — job summary over both passes; anything still
-   unread gets a `::warning::` and a PR comment with a ready-to-paste
-   `@claude` prompt (posted with `GITHUB_TOKEN`, so it triggers nothing).
-10. **Verify a review verdict was posted** — the action reports success even
-   with no verdict, so this step reads the reviews API itself: last *bodied*
-   claude review for this head SHA since the start time — the follow-up's,
-   when one ran. `APPROVED` / `CHANGES_REQUESTED` pass; `COMMENTED` (no
-   binary verdict) fails the check; `DISMISSED` is a notice; no verdict fails
-   and dumps the agent's last turn.
-11. **Request human review** — on `COMMENTED` or `NOT_REVIEWED`: apply
+10. **Report review coverage** — job summary over both passes; anything still
+    unread gets a `::warning::` and a PR comment with a ready-to-paste
+    `@claude` prompt (posted with `GITHUB_TOKEN`, so it triggers nothing).
+11. **Verify a review verdict was posted** — the action reports success even
+    with no verdict, so this step reads the reviews API itself: last *bodied*
+    claude review for this head SHA since the start time — the follow-up's,
+    when one ran. `APPROVED` / `CHANGES_REQUESTED` pass; `COMMENTED` (no
+    binary verdict) fails the check; `DISMISSED` is a notice; no verdict fails
+    and dumps the agent's last turn.
+12. **Request human review** — on `COMMENTED` or `NOT_REVIEWED`: apply
     `escalation_label` and request `escalate_to` reviewers, minus the PR
     author (GitHub 422s) and anyone already pending.
 
