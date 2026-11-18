@@ -322,6 +322,7 @@ Three tiers, in order of how often they should happen:
 | No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
 | A PR comment from github-actions says "The automated review of `<sha>` did not read N of M changed files" | The first pass skipped those diffs and the follow-up pass did not finish them (the job summary's "Review coverage" and the "Review the diffs the first pass did not read" log say why). The verdict stands but does not cover those files: post the comment's `@claude` prompt, or review them yourself. If it keeps happening, open an issue here with the run link. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
+| `review / claude-review` is red, and a comment from github-actions says the review "stopped before posting a verdict" because the Claude account hit its usage limit | The Claude account behind the repo's `CLAUDE_CODE_OAUTH_TOKEN` used up its 5-hour or weekly allowance. Until the reset time the comment gives, every review and `@claude` reply on that account fails, in every repo that shares it. After the reset, re-run the failed job (the comment links the run) or push. Seen 2026-11-14 and 15, when a stack of about 20 PRs was pushed twice. If it keeps happening, the account needs a larger plan or the busiest repo a token of its own. If nobody's PRs explain the usage, someone else may be draining it: rotate the token (see "The org setup"). |
 | Review summary says it could not read `statusCheckRollup` / CI ("Resource not accessible by integration"), or caveats its verdict on not having seen the tests | The review is told it cannot read CI and must not try or caveat (the prompt block in `claude-pr-review.yml`). If that wording is back, the prompt on `v1` has regressed (it happened 2026-09-17 to 21): roll `v1` back per `release.yml`'s header and open an issue here. Nothing to fix in your caller — `required_check` is prompt context only. |
 
 ## The org setup (done for sentfutures 2026-08-20 — kept for reference)
@@ -366,6 +367,23 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
    the shared token means updating every repo that did this.
 
 ## Changelog
+
+- **v1, 2026-11-18** — a review stopped by the Claude account's usage limit
+  says so on the PR, with the reset time. On animal-welfare-data-pipeline,
+  19 reviews failed on 2026-11-14 and 15 with "You've hit your 5-hour limit
+  · resets 10:30pm (UTC)", during two pushes of a stack of about 20 PRs.
+  Each PR showed a red check and nothing else; the reason was in the run log
+  alone, so nobody knew to wait for the reset and re-run. The account was the
+  shared one: that repo's repo-level token and the org secret drew on the
+  same 5-hour window. Now a step after the review reads the action's
+  execution file, which the action writes before it fails, and on
+  `api_error: usage_limit_reached` posts a comment naming the window and its
+  reset time (from the last rejected `rate_limit_event`), once per commit and
+  window, plus an `::error::` annotation and a job summary. Report-only, like
+  coverage: the check was already red. Tested locally against that run's
+  execution file, rebuilt from its log. Not covered yet: a limit hit by the
+  follow-up pass, which fails quietly as before (its first verdict stands),
+  or by the `@claude` handler.
 
 - **review-bot plugin, 2026-10-21** — `/install-review-bot` and
   `/disable-review-bot` find the bot's workflows by what they call, not by
