@@ -84,8 +84,9 @@ Also watch CI: a red test check is feedback too, and usually more urgent than a 
 Review bodies and inline comments live in different places. Missing the inline ones is the most common failure:
 
 ```bash
-# Review summaries + verdicts. Read the NEWEST, not the first — a push
-# invalidates the prior review but leaves it here as DISMISSED, so
+# Review summaries + verdicts. Read the NEWEST, not the first — after a
+# push the prior review stays in this list: as DISMISSED where the branch
+# rules dismiss stale reviews, still as APPROVED where they don't. So
 # .reviews[0] is often a stale verdict on an older commit. Every entry
 # carries .commit.oid; check it against current HEAD before trusting it.
 gh pr view <N> --repo <owner/repo> --json reviews \
@@ -179,7 +180,7 @@ Then wait. Don't push a change to a disputed point before the user answers. If s
 ## Gotchas
 
 - **`gh` and sandboxing.** If `gh` fails with a TLS/certificate error (e.g. `x509: OSStatus -26276`) or a spurious "token is invalid", that's the sandbox blocking the system trust store, not broken auth. Retry the same command with the sandbox disabled. Don't send the user off to re-authenticate over this.
-- **New pushes can invalidate an approval.** After pushing follow-up commits, re-check `reviewDecision` rather than assuming the earlier approval still stands — a fix that addresses a review will typically dismiss that very review.
+- **New pushes can invalidate an approval.** After pushing follow-up commits, don't assume the earlier approval still stands: check that the newest review's `commit.oid` is the new HEAD (Step 3). Don't use `reviewDecision` for this; it is unreliable on repos that don't require approvals (Step 1). Where the branch rules dismiss stale reviews, the push turns the old approval DISMISSED. Where they don't, it stays on the PR as APPROVED, but for an older commit.
 - **A re-review may be needed.** A bot reviewer triggered by pushes re-runs itself; a human who requested changes needs re-review requested explicitly.
 - **Silence from CI is not success** — a check that never started looks the same as one that passed if you only test for absence of failure. Read the actual conclusions.
 - **Working in a git worktree?** Run everything from the worktree directory, and never use bare `git stash`/`git stash pop` — the stash stack is shared with the main checkout and other worktrees.
