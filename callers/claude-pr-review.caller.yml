@@ -12,6 +12,8 @@ on:
     # inside the shared workflow. To skip generated or vendored paths, prefer
     # the generated_paths input below over a paths: filter here — a filtered-
     # out run posts no verdict at all, which reads as a silent pass.
+    # `ready_for_review` starts the first review of a PR opened as a draft:
+    # the shared workflow skips drafts (since 2026-11-21), so keep it.
     types: [opened, synchronize, ready_for_review, reopened, edited]
 
 jobs:

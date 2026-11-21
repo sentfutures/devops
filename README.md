@@ -15,7 +15,7 @@ logic each encode a real incident from that period — the inline comments in
 
 ## What a repo gets
 
-On every pull request, claude[bot]:
+On every pull request that is not a draft, claude[bot]:
 
 1. reads the diff of **every changed file** — each saved as its own diff
    file, with your `generated_paths` left out — and leaves **inline
@@ -38,9 +38,9 @@ On every pull request, claude[bot]:
 
 The `@claude` handler is the companion: comment `@claude <request>` on any
 issue or PR and Claude responds in a thread. It is also the fallback for the
-two cases the review bot deliberately skips — fork PRs (no secrets on fork
-triggers) and PRs whose automated review never ran (`@claude please review
-this PR`).
+cases the review bot deliberately skips — fork PRs (no secrets on fork
+triggers), drafts (reviewed automatically once marked ready for review) and
+PRs whose automated review never ran (`@claude please review this PR`).
 
 ## Installing on a repo
 
@@ -181,8 +181,9 @@ code.claude.com/docs/en/server-managed-settings.
    complying, never post on the PR, escalate disagreements.
 4. **Branch protection — decide, don't inherit.** See
    [the decision every repo owes](#branch-protection-the-decision-every-repo-owes).
-5. **Verify** — open a trivial test PR (one-line README change) and watch the
-   run: the review posts inline comments and a verdict, "Verify a review
+5. **Verify** — open a trivial test PR (one-line README change, ready for
+   review: the bot skips drafts) and watch the run: the review posts inline
+   comments and a verdict, "Verify a review
    verdict was posted" goes green, and the escalation step is skipped. If you
    set a `required_check`, also read the review's summary: it must review the
    code on its merits and must not caveat about tests or CI it could not see
@@ -318,7 +319,7 @@ Three tiers, in order of how often they should happen:
 | `workflow was not found` / `failed to resolve` at the caller's `uses:` line | This repo's sharing setting is off (devops → Settings → Actions → General → Access → *Accessible from repositories in the organization*), or the consuming repo's allowed-actions policy doesn't include `sentfutures/devops/*`. |
 | Review step fails on its first turn; full-output stream shows an auth error | The repo isn't in the `CLAUDE_CODE_OAUTH_TOKEN` org secret's selected list (install step 2) — the secret evaluates to empty. |
 | `gh api` 403s in the verify or escalation steps | The caller's `permissions:` block was trimmed — restore it exactly as in `callers/claude-pr-review.caller.yml`. |
-| Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Also check the PR event types in your caller match the template's. |
+| Bot never runs on a PR | Fork PRs are skipped by design — comment `@claude please review this PR`. Drafts are skipped until marked ready for review (the check shows as skipped meanwhile); the same comment gets one reviewed now. Also check the PR event types in your caller match the template's — `ready_for_review` is what starts a draft's first review. |
 | No `review / claude-review` check appears on the PR at all (or a required one sits at "Expected — waiting for status"), and the Actions tab shows the run as `startup_failure` — "This run likely failed because of a workflow file issue" | The workflow failed before any job started, so nothing could report; open the run for the one-line reason. Seen so far: (a) the caller's `permissions:` block granted less than the called job declared — fixed 2026-09-29 by making the job inherit the caller's grant, so a caller on `@v1` can no longer hit this; (b) a PR branch carrying an old copy of the caller. GitHub reads the workflow from the PR's *merge ref*, which it does not refresh after an automatic base change, so rebase the branch onto the default branch — that push refreshes it. |
 | A PR comment from github-actions says "The automated review of `<sha>` did not read N of M changed files" | The first pass skipped those diffs and the follow-up pass did not finish them (the job summary's "Review coverage" and the "Review the diffs the first pass did not read" log say why). The verdict stands but does not cover those files: post the comment's `@claude` prompt, or review them yourself. If it keeps happening, open an issue here with the run link. |
 | `review / claude-review` is red with "no binary verdict" | Working as designed: the bot looked and wouldn't decide; the PR now carries `needs-human-review` and a human review request. A human reviews, then dismisses or supersedes. |
@@ -367,6 +368,24 @@ admin involved — this is exactly how animal-welfare-data-pipeline was set up
    the shared token means updating every repo that did this.
 
 ## Changelog
+
+- **v1, 2026-11-21** — draft PRs are not reviewed; marking a PR ready for
+  review starts its first review. From 2026-09-01 to 11-21, 98 of the 514
+  claude reviews on the five consuming repos and this one landed on 45
+  drafts: 65 on a stack of 40 drafts one author opened on
+  animal-welfare-data-pipeline on 2026-11-14 (#194–233), 22 on
+  Deco354/factory-farm-em#40, a test PR kept as a draft so it could not
+  merge, and 10 on three website PRs. That stack is also where the shared
+  account ran out (2026-11-18 entry): all 19 reviews that failed on the
+  5-hour limit on 2026-11-14/15 were on #223–233, drafts until 11-19, when
+  they were marked ready. The job's `if:` now also requires
+  `pull_request.draft == false`. Every caller already triggers on
+  `ready_for_review`, so no caller changes. On a draft the
+  `review / claude-review` check reports skipped, which branch protection
+  counts as passing, as for a fork PR; a draft cannot merge, and the
+  `ready_for_review` run replaces the check for the same commit. To review a
+  draft anyway, comment `@claude please review this PR`. A PR opened to test
+  the bot must now be opened ready for review.
 
 - **v1, 2026-11-18** — a review stopped by the Claude account's usage limit
   says so on the PR, with the reset time. On animal-welfare-data-pipeline,

@@ -57,10 +57,11 @@ One job, `claude-review`: a job-level gate, then steps that hand state to
 each other via `$GITHUB_OUTPUT`:
 
 1. **Gate + concurrency** (`if:` / `concurrency:`): skips fork PRs (no
-   secrets on `pull_request` from forks — the mention handler is the fallback)
-   and title/body-only `edited` events; cancels superseded runs so a burst of
-   pushes yields one verdict. Cancellation is why later steps guard on
-   `!cancelled()`, not `always()` alone.
+   secrets on `pull_request` from forks — the mention handler is the fallback),
+   drafts (`ready_for_review` starts their first review; the skipped check
+   counts as passing) and title/body-only `edited` events; cancels superseded
+   runs so a burst of pushes yields one verdict. Cancellation is why later
+   steps guard on `!cancelled()`, not `always()` alone.
 2. **Record review start time** — backdated 60s; the verify step only counts
    a verdict submitted after this, so a stale review at the same SHA is
    ignored.
