@@ -56,6 +56,8 @@ until bucket=$(gh pr checks <N> --repo <owner/repo> --json name,bucket \
 done
 ```
 
+On a draft PR the bot does not run (since 2026-11-21): the check reads `skipping`, the loop exits at once, and no review is coming. Its first review starts when the PR is marked ready for review. Tell the user rather than waiting; marking it ready is their call.
+
 *A human reviewer, on a repo whose branch protection requires reviews* — `reviewDecision` is reliable there, and only there:
 
 ```bash

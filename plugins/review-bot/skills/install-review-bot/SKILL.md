@@ -130,7 +130,8 @@ executable version of its install steps.
 ## 4. Report to the user
 
 Hand back: the PR link; that a human merges it; that after merging they
-should open a trivial test PR and expect inline comments + one verdict + a
+should open a trivial test PR, ready for review rather than a draft (the bot
+skips drafts), and expect inline comments + one verdict + a
 green `review / claude-review` check; and that testing the mention handler
 means **they** comment `@claude say hello` — comments are always posted by
 the human, never by you from their account.

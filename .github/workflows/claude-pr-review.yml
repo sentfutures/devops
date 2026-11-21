@@ -86,10 +86,21 @@ jobs:
     # review can't authenticate and the job always fails. Skip them here; forks
     # are reviewed on demand via an `@claude` comment (see claude-mention.yml)
     # instead.
+    # Draft PRs are skipped too, since 2026-11-21: a draft is work in progress,
+    # and every push to one cost a full review. From 2026-09-01 to then, 98 of
+    # the 514 claude reviews across the consuming repos landed on drafts, and
+    # all 19 reviews that failed on the shared account's 5-hour limit on
+    # 2026-11-14/15 were on animal-welfare-data-pipeline #223-233, drafts until
+    # 11-19 (README changelog). Every caller triggers on `ready_for_review`, so
+    # marking a draft ready starts its first review. Meanwhile the skipped job
+    # reports its check as success, as a fork PR's does: a draft cannot merge,
+    # and the ready_for_review run replaces that check for the same commit. A
+    # review of a draft on demand: comment `@claude please review this PR`.
     # For `edited` events, only run when the base branch changed (the payload's
     # `changes.base` is present only then) — not on title/body edits.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false &&
       (github.event.action != 'edited' || github.event.changes.base != null)
 
     # One review per PR at a time, and only the newest push gets a verdict.
